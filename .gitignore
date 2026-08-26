@@ -1,0 +1,68 @@
+# ===========================================================================
+# Git Ignore Rules — Distributed Job Platform
+# ===========================================================================
+
+# ----- Python Runtime & Bytecode -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+build/
+dist/
+
+# ----- Virtual Environments -----
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ----- Database Files (Runtime Persistence) -----
+job_platform.db
+job_platform.db-wal
+job_platform.db-shm
+*.db
+*.sqlite
+*.sqlite3
+
+# ----- Environment Variables & Secrets -----
+.env
+.env.local
+.env.*.local
+
+# ----- IDE & Editor Files -----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# ----- OS Generated Files -----
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Icon?
+Thumbs.db
+ehthumbs.db
+
+# ----- Log Files -----
+*.log
+logs/
+
+# ----- Testing & Coverage Cache -----
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+.mypy_cache/
+.ruff_cache/
+
+DEMO_SCRIPT.md

@@ -1,0 +1,18 @@
+# Core web framework — see scheduler/main.py for why FastAPI was chosen
+# over alternatives like Flask.
+fastapi>=0.100.0,<1.0.0
+
+# ASGI server to run FastAPI applications.
+uvicorn[standard]>=0.22.0,<1.0.0
+
+# Data validation and settings management via Python type hints.
+pydantic>=2.0.0,<3.0.0
+
+# Synchronous HTTP client used by the scheduler to call workers (Stage 1).
+requests>=2.31.0,<3.0.0
+
+# Redis client for async message queuing (Stage 3).
+redis>=4.5.0,<6.0.0
+
+# Templating engine for live web dashboard (Stage 5).
+jinja2>=3.1.0,<4.0.0

@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Distributed Job Platform | Command Center</title>
+
+    <!-- Inline SVG Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+
+    <!-- Premium Google Fonts: Outfit (Headings), Plus Jakarta Sans (Body UI), JetBrains Mono (Data) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        /* ===========================================================================
+           THEME ENGINE & DESIGN SYSTEM TOKENS
+           =========================================================================== */
+        
+        /* 1. MIDNIGHT OLED DARK THEME (Default) */
+        :root, :root[data-theme="dark"] {
+            --bg-body: #060913;
+            --bg-mesh: radial-gradient(at 0% 0%, rgba(30, 58, 138, 0.25) 0px, transparent 50%),
+                        radial-gradient(at 100% 100%, rgba(88, 28, 135, 0.25) 0px, transparent 50%),
+                        radial-gradient(at 50% 50%, rgba(15, 23, 42, 0.5) 0px, transparent 100%);
+            
+            --surface-card: rgba(15, 23, 42, 0.7);
+            --surface-card-hover: rgba(26, 38, 66, 0.85);
+            --surface-header: rgba(10, 15, 29, 0.8);
+            --surface-border: rgba(255, 255, 255, 0.08);
+            --surface-border-hover: rgba(255, 255, 255, 0.2);
+            --surface-table-header: rgba(10, 16, 31, 0.85);
+            
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            
+            --accent-primary: #38bdf8;
+            --accent-glow: rgba(56, 189, 248, 0.25);
+            
+            --color-pending: #fbbf24;
+            --color-pending-glow: rgba(251, 191, 36, 0.15);
+            
+            --color-running: #38bdf8;
+            --color-running-glow: rgba(56, 189, 248, 0.2);
+            
+            --color-completed: #34d399;
+            --color-completed-glow: rgba(52, 211, 153, 0.15);
+            
+            --color-failed: #fb7185;
+            --color-failed-glow: rgba(251, 113, 133, 0.15);
+            
+            --shadow-card: 0 12px 32px -4px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        }
+
+        /* 2. CYBERPUNK NEON THEME */
+        :root[data-theme="cyberpunk"] {
+            --bg-body: #0b0718;
+            --bg-mesh: radial-gradient(at 0% 0%, rgba(236, 72, 153, 0.25) 0px, transparent 50%),
+                        radial-gradient(at 100% 100%, rgba(124, 58, 237, 0.3) 0px, transparent 50%),
+                        radial-gradient(at 50% 50%, rgba(15, 10, 31, 0.6) 0px, transparent 100%);
+            
+            --surface-card: rgba(20, 14, 40, 0.75);
+            --surface-card-hover: rgba(33, 23, 64, 0.85);
+            --surface-header: rgba(15, 10, 31, 0.85);
+            --surface-border: rgba(236, 72, 153, 0.18);
+            --surface-border-hover: rgba(236, 72, 153, 0.4);
+            --surface-table-header: rgba(15, 10, 31, 0.9);
+            
+            --text-primary: #ffffff;
+            --text-secondary: #c4b5fd;
+            --text-muted: #8b5cf6;
+            
+            --accent-primary: #f43f5e;
+            --accent-glow: rgba(244, 63, 94, 0.3);
+            
+            --color-pending: #facc15;
+            --color-pending-glow: rgba(250, 204, 21, 0.2);
+            
+            --color-running: #22d3ee;
+            --color-running-glow: rgba(34, 211, 238, 0.25);
+            
+            --color-completed: #a7f3d0;
+            --color-completed-glow: rgba(167, 243, 208, 0.2);
+            
+            --color-failed: #ff0055;
+            --color-failed-glow: rgba(255, 0, 85, 0.25);
+            
+            --shadow-card: 0 12px 35px -5px rgba(124, 58, 237, 0.25), inset 0 1px 1px rgba(236, 72, 153, 0.2);
+        }
+
+        /* 3. CLEAN ENTERPRISE LIGHT THEME */
+        :root[data-theme="light"] {
+            --bg-body: #f8fafc;
+            --bg-mesh: radial-gradient(at 0% 0%, rgba(224, 242, 254, 0.8) 0px, transparent 50%),
+                        radial-gradient(at 100% 100%, rgba(238, 242, 255, 0.8) 0px, transparent 50%);
+            
+            --surface-card: rgba(255, 255, 255, 0.85);
+            --surface-card-hover: rgba(255, 255, 255, 1);
+            --surface-header: rgba(255, 255, 255, 0.85);
+            --surface-border: rgba(226, 232, 240, 0.8);
+            --surface-border-hover: rgba(148, 163, 184, 0.4);
+            --surface-table-header: rgba(241, 245, 249, 0.9);
+            
+            --text-primary: #0f172a;
+            --text-secondary: #475569;
+            --text-muted: #94a3b8;
+            
+            --accent-primary: #0284c7;
+            --accent-glow: rgba(2, 132, 199, 0.15);
+            
+            --color-pending: #d97706;
+            --color-pending-glow: rgba(217, 119, 6, 0.12);
+            
+            --color-running: #0284c7;
+            --color-running-glow: rgba(2, 132, 199, 0.15);
+            
+            --color-completed: #059669;
+            --color-completed-glow: rgba(5, 150, 105, 0.12);
+            
+            --color-failed: #dc2626;
+            --color-failed-glow: rgba(220, 38, 38, 0.12);
+            
+            --shadow-card: 0 10px 25px -5px rgba(15, 23, 42, 0.05), 0 0 1px rgba(15, 23, 42, 0.1);
+        }
+
+        /* ===========================================================================
+           GLOBAL RESET & LAYOUT
+           =========================================================================== */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-body);
+            background-image: var(--bg-mesh);
+            background-attachment: fixed;
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 2rem 1.5rem;
+            transition: background 0.4s ease, color 0.4s ease;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container {
+            max-width: 1380px;
+            margin: 0 auto;
+        }
+
+        /* ===========================================================================
+           HEADER & CONTROLS
+           =========================================================================== */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding: 1.25rem 1.75rem;
+            background: var(--surface-header);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--surface-border);
+            border-radius: 20px;
+            box-shadow: var(--shadow-card);
+            transition: all 0.4s ease;
+        }
+
+        .brand-box {
+            display: flex;
+            align-items: center;
+            gap: 1.25rem;
+        }
+
+        .brand-info h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .brand-info p {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 1.25rem;
+        }
+
+        /* Live Indicator Badge */
+        @keyframes pulseDot {
+            0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(52, 211, 153, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+        }
+
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.6rem;
+            background: var(--surface-card);
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            border: 1px solid var(--surface-border);
+            font-size: 0.825rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--color-completed);
+            border-radius: 50%;
+            animation: pulseDot 2s infinite;
+        }
+
+        .live-clock {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        /* Theme Switcher Segmented Button */
+        .theme-switcher {
+            display: flex;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 0.25rem;
+            border-radius: 12px;
+            border: 1px solid var(--surface-border);
+            gap: 0.25rem;
+        }
+
+        .theme-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            padding: 0.4rem 0.75rem;
+            border-radius: 8px;
+            font-size: 0.775rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            transition: all 0.25s ease;
+        }
+
+        .theme-btn:hover {
+            color: var(--text-primary);
+        }
+
+        .theme-btn.active {
+            background: var(--surface-card-hover);
+            color: var(--text-primary);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--surface-border-hover);
+        }
+
+        .theme-btn svg {
+            width: 14px;
+            height: 14px;
+            stroke-width: 2;
+        }
+
+        /* ===========================================================================
+           SUMMARY CARDS GRID & METRICS
+           =========================================================================== */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2rem;
+        }
+
+        .card {
+            background: var(--surface-card);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--surface-border);
+            border-radius: 18px;
+            padding: 1.35rem 1.5rem;
+            box-shadow: var(--shadow-card);
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Subtle glowing top accent bar per metric type */
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            opacity: 0.8;
+            transition: opacity 0.3s ease;
+        }
+
+        .card-pending::before { background: var(--color-pending); }
+        .card-running::before { background: var(--color-running); }
+        .card-completed::before { background: var(--color-completed); }
+        .card-failed::before { background: var(--color-failed); }
+        .card-workers::before { background: var(--accent-primary); }
+
+        .card:hover {
+            background: var(--surface-card-hover);
+            border-color: var(--surface-border-hover);
+            transform: translateY(-4px);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 0.85rem;
+        }
+
+        .card-label {
+            font-size: 0.775rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+        }
+
+        .card-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--surface-border);
+        }
+
+        .card-icon svg {
+            width: 16px;
+            height: 16px;
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .card-pending .card-icon svg { stroke: var(--color-pending); }
+        .card-running .card-icon svg { stroke: var(--color-running); }
+        .card-completed .card-icon svg { stroke: var(--color-completed); }
+        .card-failed .card-icon svg { stroke: var(--color-failed); }
+        .card-workers .card-icon svg { stroke: var(--accent-primary); }
+
+        .card-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 2.35rem;
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            line-height: 1;
+            margin-bottom: 0.4rem;
+        }
+
+        .card-pending .card-value { color: var(--color-pending); }
+        .card-running .card-value { color: var(--color-running); }
+        .card-completed .card-value { color: var(--color-completed); }
+        .card-failed .card-value { color: var(--color-failed); }
+        .card-workers .card-value { color: var(--accent-primary); }
+
+        .card-footer {
+            font-size: 0.775rem;
+            color: var(--text-muted);
+        }
+
+        /* ===========================================================================
+           TABLE SECTIONS & CONTROLS
+           =========================================================================== */
+        .layout-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 2rem;
+        }
+
+        @media (min-width: 1024px) {
+            .layout-grid {
+                grid-template-columns: 1fr 1.65fr;
+            }
+        }
+
+        .section-card {
+            background: var(--surface-card);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--surface-border);
+            border-radius: 20px;
+            padding: 1.5rem;
+            box-shadow: var(--shadow-card);
+            transition: all 0.4s ease;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1.25rem;
+            padding-bottom: 0.85rem;
+            border-bottom: 1px solid var(--surface-border);
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .section-header h2 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+        }
+
+        /* Filter Controls */
+        .table-controls {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .search-box {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .search-box input {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--surface-border);
+            color: var(--text-primary);
+            padding: 0.4rem 0.75rem 0.4rem 2rem;
+            border-radius: 10px;
+            font-size: 0.775rem;
+            outline: none;
+            width: 160px;
+            transition: all 0.3s ease;
+        }
+
+        .search-box input:focus {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+            width: 200px;
+        }
+
+        .search-box svg {
+            position: absolute;
+            left: 0.6rem;
+            width: 13px;
+            height: 13px;
+            stroke: var(--text-muted);
+            fill: none;
+            stroke-width: 2;
+        }
+
+        .table-container {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 0.85rem;
+            text-align: left;
+        }
+
+        th {
+            background: var(--surface-table-header);
+            color: var(--text-muted);
+            font-weight: 700;
+            padding: 0.85rem 1rem;
+            border-bottom: 1px solid var(--surface-border);
+            font-size: 0.725rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        th:first-child { border-top-left-radius: 10px; border-bottom-left-radius: 10px; }
+        th:last-child { border-top-right-radius: 10px; border-bottom-right-radius: 10px; }
+
+        td {
+            padding: 0.9rem 1rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            color: var(--text-primary);
+            transition: background 0.25s ease;
+        }
+
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.035);
+        }
+
+        .mono {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.825rem;
+            color: var(--text-secondary);
+        }
+
+        /* ===========================================================================
+           STATUS BADGES & MICRO-ANIMATIONS
+           =========================================================================== */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            padding: 0.28rem 0.7rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: capitalize;
+            transition: all 0.3s ease;
+        }
+
+        .badge-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+
+        /* Online / Completed Badge */
+        .badge.online, .badge.completed {
+            background: var(--color-completed-glow);
+            color: var(--color-completed);
+            border: 1px solid rgba(52, 211, 153, 0.3);
+        }
+        .badge.online .badge-dot, .badge.completed .badge-dot {
+            background-color: var(--color-completed);
+        }
+
+        /* Offline / Failed Badge */
+        .badge.offline, .badge.failed {
+            background: var(--color-failed-glow);
+            color: var(--color-failed);
+            border: 1px solid rgba(251, 113, 133, 0.3);
+        }
+        .badge.offline .badge-dot, .badge.failed .badge-dot {
+            background-color: var(--color-failed);
+        }
+
+        /* Pending / Queued Badge */
+        .badge.pending, .badge.queued {
+            background: var(--color-pending-glow);
+            color: var(--color-pending);
+            border: 1px solid rgba(251, 191, 36, 0.3);
+        }
+        .badge.pending .badge-dot, .badge.queued .badge-dot {
+            background-color: var(--color-pending);
+        }
+
+        /* Running Badge with Dynamic Keyframe Pulse */
+        @keyframes runningGlowPulse {
+            0% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.6); }
+            70% { box-shadow: 0 0 0 8px rgba(56, 189, 248, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0); }
+        }
+
+        .badge.running {
+            background: var(--color-running-glow);
+            color: var(--color-running);
+            border: 1px solid rgba(56, 189, 248, 0.4);
+        }
+        .badge.running .badge-dot {
+            background-color: var(--color-running);
+            animation: runningGlowPulse 1.8s infinite;
+        }
+
+        /* Heartbeat Pulse for Online Worker Dot */
+        @keyframes heartbeatPulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.4); opacity: 0.7; }
+        }
+        .badge.online .badge-dot {
+            animation: heartbeatPulse 2s ease-in-out infinite;
+        }
+
+        /* Empty State Graphic Container */
+        .empty-box {
+            text-align: center;
+            padding: 3.5rem 1rem;
+            color: var(--text-muted);
+        }
+
+        .empty-box svg {
+            width: 48px;
+            height: 48px;
+            stroke: var(--text-muted);
+            opacity: 0.5;
+            margin-bottom: 0.75rem;
+            fill: none;
+            stroke-width: 1.5;
+        }
+
+        .empty-box p {
+            font-size: 0.875rem;
+        }
+
+        .empty-box code {
+            font-family: 'JetBrains Mono', monospace;
+            background: rgba(0, 0, 0, 0.25);
+            padding: 0.2rem 0.4rem;
+            border-radius: 6px;
+            color: var(--accent-primary);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header & Top Navigation -->
+        <header>
+            <div class="brand-box">
+                <div class="brand-info">
+                    <h1>Distributed Job Platform</h1>
+                    <p>Real-time distributed observability, worker liveness & execution metrics</p>
+                </div>
+            </div>
+            <div class="header-actions">
+                <!-- Theme Switcher Segmented Control -->
+                <div class="theme-switcher">
+                    <button class="theme-btn active" id="theme-dark" onclick="setTheme('dark')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                        Dark
+                    </button>
+                    <button class="theme-btn" id="theme-cyberpunk" onclick="setTheme('cyberpunk')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                        Neon
+                    </button>
+                    <button class="theme-btn" id="theme-light" onclick="setTheme('light')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+                        Light
+                    </button>
+                </div>
+
+                <!-- Live Status Badge -->
+                <div class="status-pill">
+                    <div class="status-dot"></div>
+                    <span>System Live</span>
+                    <span class="live-clock" id="last-updated">• --:--:--</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Summary Metrics Cards Grid -->
+        <div class="metrics-grid">
+            <!-- Pending Card -->
+            <div class="card card-pending">
+                <div class="card-header">
+                    <span class="card-label">Pending / Queued</span>
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    </div>
+                </div>
+                <div class="card-value" id="metric-pending">0</div>
+                <div class="card-footer" id="metric-queue-length">Queue depth: 0</div>
+            </div>
+
+            <!-- Running Card -->
+            <div class="card card-running">
+                <div class="card-header">
+                    <span class="card-label">In Progress</span>
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                    </div>
+                </div>
+                <div class="card-value" id="metric-running">0</div>
+                <div class="card-footer">Active compute tasks</div>
+            </div>
+
+            <!-- Completed Card -->
+            <div class="card card-completed">
+                <div class="card-header">
+                    <span class="card-label">Completed</span>
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    </div>
+                </div>
+                <div class="card-value" id="metric-completed">0</div>
+                <div class="card-footer">Successfully processed</div>
+            </div>
+
+            <!-- Failed Card -->
+            <div class="card card-failed">
+                <div class="card-header">
+                    <span class="card-label">Failed</span>
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                    </div>
+                </div>
+                <div class="card-value" id="metric-failed">0</div>
+                <div class="card-footer">Execution errors</div>
+            </div>
+
+            <!-- Workers Card -->
+            <div class="card card-workers">
+                <div class="card-header">
+                    <span class="card-label">Workers Online</span>
+                    <div class="card-icon">
+                        <svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                    </div>
+                </div>
+                <div class="card-value" id="metric-workers">0 / 0</div>
+                <div class="card-footer">Compute cluster nodes</div>
+            </div>
+        </div>
+
+        <!-- Main Content Layout Grid -->
+        <div class="layout-grid">
+            <!-- Worker Registry Table -->
+            <div class="section-card">
+                <div class="section-header">
+                    <h2>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="stroke: var(--accent-primary);"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                        Worker Cluster Registry
+                    </h2>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Worker Node</th>
+                                <th>Status</th>
+                                <th>Jobs Done</th>
+                                <th>Last Heartbeat</th>
+                            </tr>
+                        </thead>
+                        <tbody id="worker-table-body">
+                            <tr>
+                                <td colspan="4" class="empty-box">
+                                    <svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/></svg>
+                                    <p>Loading worker cluster registry...</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Recent Jobs Execution Table -->
+            <div class="section-card">
+                <div class="section-header">
+                    <h2>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="stroke: var(--color-running);"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                        Recent Job Execution Audit
+                    </h2>
+                    <div class="table-controls">
+                        <div class="search-box">
+                            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                            <input type="text" id="job-search-input" placeholder="Filter jobs..." onkeyup="filterJobs()">
+                        </div>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Job ID</th>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>Worker</th>
+                                <th>Submitted</th>
+                            </tr>
+                        </thead>
+                        <tbody id="job-table-body">
+                            <tr>
+                                <td colspan="5" class="empty-box">
+                                    <svg viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/></svg>
+                                    <p>Loading job execution history...</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Live Client Logic -->
+    <script>
+        // Track metric state for smooth count-up transitions
+        const metricsStore = { pending: 0, running: 0, completed: 0, failed: 0 };
+        let cachedJobsData = [];
+
+        /**
+         * Dynamic Theme Manager.
+         * Toggles data-theme attribute on root element and persists selection in localStorage.
+         */
+        function setTheme(themeName) {
+            document.documentElement.setAttribute('data-theme', themeName);
+            localStorage.setItem('dashboard_theme', themeName);
+
+            // Update active state on theme switcher buttons
+            document.querySelectorAll('.theme-btn').forEach(btn => btn.classList.remove('active'));
+            const activeBtn = document.getElementById(`theme-${themeName}`);
+            if (activeBtn) activeBtn.classList.add('active');
+        }
+
+        // Initialize saved theme preference on initial load
+        (function initTheme() {
+            const savedTheme = localStorage.getItem('dashboard_theme') || 'dark';
+            setTheme(savedTheme);
+        })();
+
+        /**
+         * Smooth Numeric Count-Up Animation using requestAnimationFrame.
+         */
+        function animateValue(id, start, end, duration = 500) {
+            if (start === end) return;
+            const obj = document.getElementById(id);
+            if (!obj) return;
+
+            const startTime = performance.now();
+            function update(currentTime) {
+                const elapsed = currentTime - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const easeOut = 1 - Math.pow(1 - progress, 3); // Cubic ease-out
+                
+                obj.textContent = Math.floor(start + (end - start) * easeOut);
+                
+                if (progress < 1) {
+                    requestAnimationFrame(update);
+                } else {
+                    obj.textContent = end;
+                }
+            }
+            requestAnimationFrame(update);
+        }
+
+        /**
+         * Format ISO timestamp to relative time string ("4s ago", "2m ago").
+         */
+        function formatRelative(isoStr) {
+            if (!isoStr) return 'N/A';
+            const date = new Date(isoStr);
+            const now = new Date();
+            const sec = Math.floor((now - date) / 1000);
+
+            if (isNaN(sec)) return 'N/A';
+            if (sec < 4) return 'just now';
+            if (sec < 60) return `${sec}s ago`;
+            const min = Math.floor(sec / 60);
+            if (min < 60) return `${min}m ago`;
+            const hr = Math.floor(min / 60);
+            if (hr < 24) return `${hr}h ago`;
+            return `${Math.floor(hr / 24)}d ago`;
+        }
+
+        function truncate(str, len = 8) {
+            if (!str) return 'N/A';
+            return str.length > len ? str.substring(0, len) + '…' : str;
+        }
+
+        /**
+         * Client-side Real-time Search Filter for Recent Jobs.
+         */
+        function filterJobs() {
+            const query = (document.getElementById('job-search-input').value || '').toLowerCase().trim();
+            const filtered = cachedJobsData.filter(j => 
+                (j.job_id && j.job_id.toLowerCase().includes(query)) ||
+                (j.job_type && j.job_type.toLowerCase().includes(query)) ||
+                (j.status && j.status.toLowerCase().includes(query)) ||
+                (j.worker_id && j.worker_id.toLowerCase().includes(query))
+            );
+            renderJobTable(filtered);
+        }
+
+        function renderJobTable(jobs) {
+            const jobBody = document.getElementById('job-table-body');
+            if (!jobs || jobs.length === 0) {
+                jobBody.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="empty-box">
+                            <svg viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/></svg>
+                            <p>No matching jobs found.</p>
+                        </td>
+                    </tr>`;
+            } else {
+                jobBody.innerHTML = jobs.map(j => `
+                    <tr>
+                        <td class="mono" title="${j.job_id}">${truncate(j.job_id)}</td>
+                        <td style="font-weight: 600;">${j.job_type}</td>
+                        <td>
+                            <span class="badge ${j.status}">
+                                <span class="badge-dot"></span>
+                                ${j.status}
+                            </span>
+                        </td>
+                        <td class="mono">${j.worker_id ? truncate(j.worker_id) : '—'}</td>
+                        <td>${formatRelative(j.submitted_at)}</td>
+                    </tr>
+                `).join('');
+            }
+        }
+
+        /**
+         * Main Data Fetcher & UI Updater Loop.
+         */
+        async function fetchDashboardData() {
+            try {
+                const res = await fetch('/api/dashboard_data');
+                if (!res.ok) throw new Error('Network error');
+                const data = await res.json();
+
+                // 1. Update & Animate Metric Counters
+                const p = data.job_counts.pending || 0;
+                const r = data.job_counts.running || 0;
+                const c = data.job_counts.completed || 0;
+                const f = data.job_counts.failed || 0;
+
+                animateValue('metric-pending', metricsStore.pending, p);
+                animateValue('metric-running', metricsStore.running, r);
+                animateValue('metric-completed', metricsStore.completed, c);
+                animateValue('metric-failed', metricsStore.failed, f);
+
+                metricsStore.pending = p;
+                metricsStore.running = r;
+                metricsStore.completed = c;
+                metricsStore.failed = f;
+
+                document.getElementById('metric-queue-length').textContent = `Queue depth: ${data.pending_queue_length || 0}`;
+                document.getElementById('metric-workers').textContent = `${data.online_workers} / ${data.total_workers}`;
+
+                // 2. Render Worker Registry Table
+                const workerBody = document.getElementById('worker-table-body');
+                if (!data.workers || data.workers.length === 0) {
+                    workerBody.innerHTML = `
+                        <tr>
+                            <td colspan="4" class="empty-box">
+                                <svg viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/></svg>
+                                <p>No worker nodes online. Run <code>python -m worker.consumer</code> to register a compute node.</p>
+                            </td>
+                        </tr>`;
+                } else {
+                    workerBody.innerHTML = data.workers.map(w => `
+                        <tr>
+                            <td class="mono">${w.worker_id}</td>
+                            <td>
+                                <span class="badge ${w.status}">
+                                    <span class="badge-dot"></span>
+                                    ${w.status}
+                                </span>
+                            </td>
+                            <td style="font-weight: 700; font-family: 'JetBrains Mono', monospace;">${w.jobs_completed}</td>
+                            <td>${formatRelative(w.last_heartbeat)}</td>
+                        </tr>
+                    `).join('');
+                }
+
+                // 3. Cache & Render Jobs Table (respecting active search filter)
+                cachedJobsData = data.recent_jobs || [];
+                const searchQuery = (document.getElementById('job-search-input').value || '').trim();
+                if (searchQuery) {
+                    filterJobs();
+                } else {
+                    renderJobTable(cachedJobsData);
+                }
+
+                // 4. Update Header Clock
+                const nowStr = new Date().toLocaleTimeString();
+                document.getElementById('last-updated').textContent = `• ${nowStr}`;
+
+            } catch (err) {
+                console.error('Fetch dashboard error:', err);
+                document.getElementById('last-updated').textContent = '• Offline';
+            }
+        }
+
+        // Initial trigger and start 2s polling interval
+        fetchDashboardData();
+        setInterval(fetchDashboardData, 2000);
+    </script>
+</body>
+</html>
