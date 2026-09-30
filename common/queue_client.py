@@ -75,6 +75,9 @@ class JobQueue:
             port=port,
             db=db,
             decode_responses=True,
+            protocol=2,
+            socket_connect_timeout=2.0,
+            socket_timeout=5.0,
         )
 
         # Resilient connection check

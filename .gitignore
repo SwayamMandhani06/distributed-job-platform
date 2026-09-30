@@ -63,6 +63,9 @@ logs/
 htmlcov/
 coverage.xml
 .mypy_cache/
-.ruff_cache/
-
-DEMO_SCRIPT.md
+# ----- Local Tools & Binaries -----
+tools/
+*.exe
+*.dll
+*.pdb
+*.zip

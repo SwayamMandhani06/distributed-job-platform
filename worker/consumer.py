@@ -15,13 +15,13 @@ Stage 4 Additions:
 """
 
 import json
+import random
 import threading
 import time
 from uuid import uuid4
 
 from common.config import (
     HEARTBEAT_INTERVAL_SECONDS,
-    SIMULATED_JOB_DURATION_SECONDS,
 )
 from common.logging_config import setup_logger
 from common.database import (
@@ -58,8 +58,12 @@ def heartbeat_loop(stop_event: threading.Event) -> None:
 
 def execute_task(job_type: str, payload: dict) -> dict:
     """Simulate task execution based on job type."""
-    simulated_duration: float = SIMULATED_JOB_DURATION_SECONDS
-    logger.info("Executing job_type='%s' (simulated %.1fs sleep)...", job_type, simulated_duration)
+    # Demo visibility tweak: Use slightly longer and randomized duration (3 to 6 seconds)
+    # instead of a fixed duration so live demos have enough time to visually show a job
+    # in the "running" state on the dashboard before it completes.
+    # Note: This is purely a demo visibility adjustment, not a functional requirement.
+    simulated_duration: float = round(random.uniform(3.0, 6.0), 2)
+    logger.info("Executing job_type='%s' (simulated %.2fs sleep)...", job_type, simulated_duration)
     time.sleep(simulated_duration)
 
     if job_type == "email":

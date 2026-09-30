@@ -115,7 +115,9 @@ distributed-job-platform/
 │   ├── main.py            # Legacy FastAPI HTTP worker endpoint (Stage 1/2)
 │   └── models.py          # Pydantic models (WorkerResponse)
 ├── tests/
-│   └── test_client.py     # Integration test — submits, polls jobs, and checks worker health
+│   ├── __init__.py
+│   ├── test_client.py     # Integration test — submits, polls jobs, and checks worker health
+│   └── load_generator.py  # Demo load generator — continuous job streaming & load simulation
 ├── .env.example           # Environment variables configuration template
 ├── ARCHITECTURE.md        # Technical design & syllabus concept mapping guide
 ├── DEMO_SCRIPT.md         # Live viva presentation script & troubleshooting guide
@@ -148,6 +150,21 @@ python -m worker.consumer
 
 ```bash
 python -m tests.test_client
+```
+
+### 4. Run the Demo Load Generator (Continuous Job Stream)
+
+For live presentations and observing the real-time web dashboard:
+
+```bash
+# Submit 30 jobs at 0.5s intervals (default)
+python -m tests.load_generator
+
+# Submit 50 jobs at a fast 0.2s pace
+python -m tests.load_generator --count 50 --interval 0.2
+
+# Run continuously for 60 seconds throughout a live demo
+python -m tests.load_generator --duration 60 --interval 0.5
 ```
 
 ---

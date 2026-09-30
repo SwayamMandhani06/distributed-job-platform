@@ -10,6 +10,7 @@ This document provides a comprehensive architectural breakdown of the **Distribu
 graph TB
     subgraph Client Layer
         Client["🖥️ Integration Client<br/>(tests/test_client.py)"]
+        LoadGen["⚡ Demo Load Generator<br/>(tests/load_generator.py)"]
         Browser["🌐 Web Browser<br/>(dashboard.html)"]
     end
 
@@ -30,6 +31,7 @@ graph TB
 
     %% Client Interactions
     Client -- "1. POST /submit_job" --> FastAPI
+    LoadGen -- "1. POST /submit_job" --> FastAPI
     Browser -- "Auto-poll (2s) GET /api/dashboard_data" --> FastAPI
 
     %% Scheduler Internal Actions
@@ -59,7 +61,7 @@ graph TB
 
 ```
 Step 1: Submission
-Client -> POST /submit_job (JobRequest JSON) -> Scheduler
+Client / Load Generator -> POST /submit_job (JobRequest JSON) -> Scheduler
 
 Step 2: Persistence (Single Source of Truth)
 Scheduler -> INSERT INTO jobs (status='pending') -> SQLite (job_platform.db)
