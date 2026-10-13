@@ -24,8 +24,32 @@ import requests
 
 DEFAULT_SCHEDULER_URL = "http://localhost:8000"
 
-# Sample job templates matching payload shapes used in tests/test_client.py
+# Sample job templates matching payload shapes used across tests and live demos
 SAMPLE_JOB_TEMPLATES = [
+    lambda: {
+        "job_type": "math_prime_sieve",
+        "payload": {
+            "limit": random.choice([1000, 5000, 10000, 25000]),
+        },
+    },
+    lambda: {
+        "job_type": "hash_checksum",
+        "payload": {
+            "data": f"Synthetic-Block-{random.randint(100000, 999999)}-timestamp-{time.time()}",
+            "algorithm": random.choice(["sha256", "sha512", "md5"]),
+        },
+    },
+    lambda: {
+        "job_type": "text_frequency",
+        "payload": {
+            "text": random.choice([
+                "distributed computing distributed systems consensus leader election fault tolerance distributed algorithms",
+                "message queue broker publisher subscriber competing consumers asynchronous worker cluster",
+                "hash checksum prime sieve word frequency token stream analysis cryptographic verification",
+            ]),
+            "top_n": random.choice([3, 5, 8]),
+        },
+    },
     lambda: {
         "job_type": "email",
         "payload": {

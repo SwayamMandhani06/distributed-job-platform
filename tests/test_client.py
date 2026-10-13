@@ -21,25 +21,31 @@ from common.config import SCHEDULER_URL
 
 SAMPLE_JOBS = [
     {
+        "job_type": "math_prime_sieve",
+        "payload": {
+            "limit": 5000,
+        },
+    },
+    {
+        "job_type": "hash_checksum",
+        "payload": {
+            "data": "Distributed Job Platform payload for cryptographic verification",
+            "algorithm": "sha256",
+        },
+    },
+    {
+        "job_type": "text_frequency",
+        "payload": {
+            "text": "distributed systems distributed computing systems parallel processing distributed architecture",
+            "top_n": 5,
+        },
+    },
+    {
         "job_type": "email",
         "payload": {
             "to": "user@example.com",
-            "subject": "Welcome!",
-            "body": "Thanks for signing up.",
-        },
-    },
-    {
-        "job_type": "csv_processing",
-        "payload": {
-            "file_path": "/data/uploads/sales_q3.csv",
-            "operations": ["deduplicate", "aggregate"],
-        },
-    },
-    {
-        "job_type": "thumbnail",
-        "payload": {
-            "image_url": "https://example.com/photos/landscape.jpg",
-            "sizes": [128, 256, 512],
+            "subject": "System Verification Notification",
+            "body": "Your distributed job batch completed successfully.",
         },
     },
 ]

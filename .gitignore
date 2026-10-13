@@ -27,6 +27,9 @@ job_platform.db-shm
 *.db
 *.sqlite
 *.sqlite3
+dump.rdb
+*.rdb
+
 
 # ----- Environment Variables & Secrets -----
 .env
@@ -64,7 +67,7 @@ htmlcov/
 coverage.xml
 .mypy_cache/
 # ----- Local Tools & Binaries -----
-tools/
+tools/redis/
 *.exe
 *.dll
 *.pdb

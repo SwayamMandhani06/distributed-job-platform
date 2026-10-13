@@ -542,13 +542,13 @@
             background-color: var(--color-completed);
         }
 
-        /* Offline / Failed Badge */
-        .badge.offline, .badge.failed {
+        /* Offline / Failed / Dead Letter Badge */
+        .badge.offline, .badge.failed, .badge.dead_letter {
             background: var(--color-failed-glow);
             color: var(--color-failed);
             border: 1px solid rgba(251, 113, 133, 0.3);
         }
-        .badge.offline .badge-dot, .badge.failed .badge-dot {
+        .badge.offline .badge-dot, .badge.failed .badge-dot, .badge.dead_letter .badge-dot {
             background-color: var(--color-failed);
         }
 
@@ -645,6 +645,13 @@
                     </button>
                 </div>
 
+                <!-- Leader Lease & Epoch Badge (Unit III) -->
+                <div class="status-pill" id="leader-pill" title="Scheduler Distributed Leader Lease & Monotonic Fencing Epoch (Unit III)" style="border-color: rgba(56, 189, 248, 0.3);">
+                    <div class="status-dot" id="leader-dot" style="background: var(--accent-primary);"></div>
+                    <span id="leader-title" style="font-weight: 600;">Leader: Standby</span>
+                    <span class="live-clock" id="leader-epoch" style="font-family: 'JetBrains Mono', monospace;">• Epoch #0</span>
+                </div>
+
                 <!-- Live Status Badge -->
                 <div class="status-pill">
                     <div class="status-dot"></div>
@@ -701,7 +708,7 @@
                     </div>
                 </div>
                 <div class="card-value" id="metric-failed">0</div>
-                <div class="card-footer">Execution errors</div>
+                <div class="card-footer" id="metric-failed-footer">Execution errors</div>
             </div>
 
             <!-- Workers Card -->
@@ -895,8 +902,10 @@
                         <td>
                             <span class="badge ${j.status}">
                                 <span class="badge-dot"></span>
-                                ${j.status}
+                                ${j.status === 'dead_letter' ? 'Dead Letter' : j.status}
                             </span>
+                            ${j.retry_count > 1 ? `<span style="font-size: 0.7rem; margin-left: 0.25rem; font-family: 'JetBrains Mono', monospace; color: var(--text-muted);" title="Execution attempt ${j.retry_count}/${j.max_retries || 3}">[Att ${j.retry_count}/${j.max_retries || 3}]</span>` : ''}
+                            ${j.lamport_ts ? `<span style="font-size: 0.7rem; margin-left: 0.35rem; opacity: 0.8; font-family: 'JetBrains Mono', monospace; color: var(--accent-primary);" title="Lamport Logical Timestamp">L#${j.lamport_ts}</span>` : ''}
                         </td>
                         <td class="mono">${j.worker_id ? truncate(j.worker_id) : '—'}</td>
                         <td>${formatRelative(j.submitted_at)}</td>
@@ -918,7 +927,8 @@
                 const p = data.job_counts.pending || 0;
                 const r = data.job_counts.running || 0;
                 const c = data.job_counts.completed || 0;
-                const f = data.job_counts.failed || 0;
+                const dl = data.job_counts.dead_letter || 0;
+                const f = (data.job_counts.failed || 0) + dl;
 
                 animateValue('metric-pending', metricsStore.pending, p);
                 animateValue('metric-running', metricsStore.running, r);
@@ -968,9 +978,34 @@
                     renderJobTable(cachedJobsData);
                 }
 
-                // 4. Update Header Clock
+                // Update Dead Letter count in Failed footer
+                const failedFooter = document.getElementById('metric-failed-footer');
+                if (failedFooter) {
+                    failedFooter.textContent = dl > 0 ? `${dl} dead-lettered` : 'Execution errors';
+                }
+
+                // 4. Update Header Clock with Physical Time and Lamport Logical Clock
                 const nowStr = new Date().toLocaleTimeString();
-                document.getElementById('last-updated').textContent = `• ${nowStr}`;
+                document.getElementById('last-updated').textContent = `• ${nowStr} • Lamport L#${data.lamport_clock || 0}`;
+
+                // 5. Update Leader Lease & Fencing Epoch Status (Unit III)
+                if (data.leader) {
+                    const lTitle = document.getElementById('leader-title');
+                    const lEpoch = document.getElementById('leader-epoch');
+                    const lDot = document.getElementById('leader-dot');
+                    if (data.leader.is_leader) {
+                        lTitle.textContent = `Leader: ${data.leader.current_leader || 'Active'}`;
+                        lDot.style.background = '#34d399';
+                    } else if (data.leader.current_leader) {
+                        lTitle.textContent = `Standby (Leader: ${data.leader.current_leader})`;
+                        lDot.style.background = '#38bdf8';
+                    } else {
+                        lTitle.textContent = 'No Leader Lease';
+                        lDot.style.background = '#fbbf24';
+                    }
+                    const ttl = Math.max(0, Math.round(data.leader.lease_ttl_remaining_seconds || 0));
+                    lEpoch.textContent = `• Epoch #${data.leader.epoch || 0} (${ttl}s TTL)`;
+                }
 
             } catch (err) {
                 console.error('Fetch dashboard error:', err);

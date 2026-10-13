@@ -106,6 +106,33 @@ Arrange **4 Terminal Windows / Split Panes** on your display before starting:
 
 ---
 
+### Step 7: Unit III Leader Election Demonstrations (Bully & Ring) 👑
+* **Bully Election Demonstration**:
+  ```powershell
+  python -m tools.bully_election_demo
+  ```
+* **Say Out Loud**:
+  > *"Here we demonstrate Garcia-Molina's Bully Election algorithm. Four nodes are modeled with priorities 10 to 40. When coordinator P4 crashes, low-priority P2 detects the failure and initiates an election. P3 answers, halting P2. With P4 dead, P3 declares itself coordinator. When P4 recovers, it immediately triggers an election, bullies P3, and reclaims coordinator status."*
+
+* **Ring Election Demonstration**:
+  ```powershell
+  python -m tools.ring_election_demo
+  ```
+* **Say Out Loud**:
+  > *"Now we demonstrate the Chang & Roberts Logical Ring Election. Nodes form a logical ring P1 -> P2 -> P3 -> P4. We inject crash failures into both P4 (coordinator) and P3. P1 initiates election, passing a token. When P2 tries to forward to dead nodes P3 and P4, it detects the failure and bypasses them directly back to P1. P2 is selected as the highest live candidate and coordinator announcement circulates without hanging."*
+
+---
+
+### Step 8: Unit III Lamport Distributed Mutual Exclusion 🛡️
+* **Mutual Exclusion Demonstration**:
+  ```powershell
+  python -m tools.mutex_lamport_demo
+  ```
+* **Say Out Loud**:
+  > *"Here three nodes (Node-A, Node-B, Node-C) compete concurrently for the shared resource `shared_audit_ledger.log`. Using Lamport's REQUEST/REPLY/RELEASE protocol, requests are totally ordered by (Lamport timestamp, Process ID). The output proves that critical section entries NEVER overlap in time. Furthermore, we demonstrate that if a participant crashes, explicit dead-node detection prevents indefinite deadlock."*
+
+---
+
 ## 🛠️ Troubleshooting Guide ("If Something Goes Wrong")
 
 | Symptom | Cause | Quick Fix Command |
@@ -114,3 +141,4 @@ Arrange **4 Terminal Windows / Split Panes** on your display before starting:
 | `[Errno 10048] address already in use (port 8000)` | Previous Uvicorn instance is still bound to port 8000 | `powershell -Command "Stop-Process -Id (Get-NetTCPConnection -LocalPort 8000).OwningProcess -Force"` |
 | `sqlite3.OperationalError: database is locked` | SQLite file opened in exclusive lock mode by external tool | Close DBeaver / DB Browser for SQLite during test runs |
 | Dashboard shows `Connection Error` | Scheduler service stopped or crashed | Restart `uvicorn scheduler.main:app --port 8000 --reload` |
+

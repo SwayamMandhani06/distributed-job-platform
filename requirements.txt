@@ -16,3 +16,11 @@ redis>=4.5.0,<6.0.0
 
 # Templating engine for live web dashboard (Stage 5).
 jinja2>=3.1.0,<4.0.0
+
+# Environment variable loader from .env
+python-dotenv>=1.0.0,<2.0.0
+
+# Testing framework and HTTP test client
+pytest>=7.0.0,<10.0.0
+httpx>=0.24.0,<1.0.0
+
