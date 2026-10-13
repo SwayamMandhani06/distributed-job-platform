@@ -1,0 +1,85 @@
+# ===========================================================================
+# Prometheus Alerting Rules for Distributed Job Platform
+# Phase 7 — Observability, Security and Operational Hardening
+# ===========================================================================
+
+groups:
+  - name: job_platform_alerts
+    rules:
+      # -----------------------------------------------------------------------
+      # 1. Dependency Availability Alert
+      # Actionable: Alert when Redis or Database dependency is offline > 30s.
+      # Avoids false alerts on transient millisecond connection blips.
+      # -----------------------------------------------------------------------
+      - alert: JobPlatformDependencyDown
+        expr: job_platform_dependency_up == 0
+        for: 30s
+        labels:
+          severity: critical
+          tier: infrastructure
+        annotations:
+          summary: "Core infrastructure dependency {{ $labels.dependency }} is DOWN"
+          description: "The distributed job platform coordinator cannot reach {{ $labels.dependency }} (operational status: 0) for > 30 seconds."
+          runbook: "Check container/process logs for {{ $labels.dependency }}. Restart the service if frozen."
+
+      # -----------------------------------------------------------------------
+      # 2. No Active Leader Alert
+      # Actionable: Alert when no scheduler instance holds active leader lease.
+      # 1-minute threshold permits graceful failover / renewal without paging.
+      # -----------------------------------------------------------------------
+      - alert: JobPlatformNoActiveLeader
+        expr: job_platform_is_leader == 0
+        for: 1m
+        labels:
+          severity: critical
+          tier: coordinator
+        annotations:
+          summary: "No active scheduler coordinator leader lease detected"
+          description: "The scheduler node has not held an active leader lease (job_platform_is_leader == 0) for over 1 minute."
+          runbook: "Inspect scheduler logs for Redis lease renewal errors or network partitioning."
+
+      # -----------------------------------------------------------------------
+      # 3. Prolonged Worker Unavailability
+      # Actionable: Alert when zero workers are online to process incoming jobs.
+      # 1-minute threshold avoids alerts during worker rolling redeployment.
+      # -----------------------------------------------------------------------
+      - alert: JobPlatformProlongedWorkerUnavailability
+        expr: job_platform_workers{status="online"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          tier: compute
+        annotations:
+          summary: "Zero online workers available for job execution"
+          description: "All worker processes have missed heartbeats or failed to register (online_workers == 0) for over 1 minute."
+          runbook: "Check worker consumer process logs and ensure worker containers are running and healthy."
+
+      # -----------------------------------------------------------------------
+      # 4. Persistent Job Failures
+      # Actionable: Alert when jobs repeatedly fail or dead-letter in sustained window.
+      # -----------------------------------------------------------------------
+      - alert: JobPlatformPersistentJobFailures
+        expr: increase(job_platform_jobs_total{status="failed"}[5m]) > 3
+        for: 2m
+        labels:
+          severity: warning
+          tier: application
+        annotations:
+          summary: "Elevated job failure rate detected"
+          description: "More than 3 jobs have failed execution in the last 5 minutes (current failed total: {{ $value }})."
+          runbook: "Check Recent Job Execution Audit table in dashboard for exception tracebacks and bad input payloads."
+
+      # -----------------------------------------------------------------------
+      # 5. High Queue Backlog
+      # Actionable: Alert when pending queue backlog grows faster than consumption.
+      # -----------------------------------------------------------------------
+      - alert: JobPlatformHighQueueBacklog
+        expr: job_platform_queue_depth{queue="pending"} > 50
+        for: 2m
+        labels:
+          severity: warning
+          tier: queue
+        annotations:
+          summary: "Redis pending job queue backlog exceeds threshold (> 50)"
+          description: "Pending queue depth is currently {{ $value }} and has remained elevated for > 2 minutes."
+          runbook: "Scale worker instances to increase throughput capacity or investigate slow job handler executions."

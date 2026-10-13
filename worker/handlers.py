@@ -163,7 +163,11 @@ def handle_email(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     subject = str(payload.get("subject", "(no subject)"))
     body = str(payload.get("body", ""))
-    message_id = f"msg-{uuid4().hex[:12]}"
+    # Idempotent message_id calculation: derive deterministically from content or explicit key
+    idempotency_key = payload.get("idempotency_key")
+    if not idempotency_key:
+        idempotency_key = hashlib.sha256(f"{to_addr}:{subject}:{body}".encode("utf-8")).hexdigest()[:12]
+    message_id = f"msg-{idempotency_key}"
 
     return {
         "status": "delivered",
@@ -171,6 +175,7 @@ def handle_email(payload: Dict[str, Any]) -> Dict[str, Any]:
         "subject": subject,
         "body_length_characters": len(body),
         "message_id": message_id,
+        "idempotency_key": idempotency_key,
     }
 
 

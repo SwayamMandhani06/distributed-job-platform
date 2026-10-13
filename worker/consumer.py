@@ -15,17 +15,19 @@ Stage 4 Additions:
 """
 
 import json
+import os
 import random
 import threading
 import time
+from datetime import datetime, timezone
 from uuid import uuid4
 
-from common.clocks import LamportClock
+from common.clocks import LamportClock, record_lamport_event
 from common.config import (
     HEARTBEAT_INTERVAL_SECONDS,
     JOB_LEASE_TIMEOUT_SECONDS,
 )
-from common.logging_config import setup_logger
+from common.logging_config import setup_logger, set_trace_context, clear_trace_context
 from common.database import (
     register_worker,
     update_heartbeat,
@@ -40,7 +42,7 @@ from worker.handlers import dispatch_task
 # ---------------------------------------------------------------------------
 # Setup logging & identity
 # ---------------------------------------------------------------------------
-WORKER_ID: str = f"worker-{uuid4().hex[:8]}"
+WORKER_ID: str = os.getenv("WORKER_ID") or f"worker-{uuid4().hex[:8]}"
 logger = setup_logger(WORKER_ID)
 
 
@@ -73,8 +75,12 @@ def start_consumer() -> None:
     logger.info("Listening for jobs on Redis 'job_queue'...")
     logger.info("=" * 60)
 
-    # 1. Register worker in database
-    register_worker(WORKER_ID)
+    # 1. Register worker in database with OS process ID and startup timestamp
+    register_worker(
+        WORKER_ID,
+        pid=os.getpid(),
+        startup_time=datetime.now(timezone.utc).isoformat(),
+    )
 
     # 2. Start background heartbeat thread
     stop_event = threading.Event()
@@ -102,6 +108,8 @@ def start_consumer() -> None:
                 continue
 
             idle_count = 0
+            # Set contextual correlation and job IDs for structured distributed tracing
+            set_trace_context(correlation_id=f"corr-{job_id[:8]}", job_id=job_id)
             logger.info("Claimed job_id=%s into processing list", job_id)
 
             # Atomically claim job in SQLite with lease and Lamport clock update
@@ -121,6 +129,7 @@ def start_consumer() -> None:
                 existing = get_job(job_id)
                 if existing and existing.get("status") in ("completed", "failed", "dead_letter"):
                     queue.remove_from_processing(job_id)
+                clear_trace_context()
                 continue
 
             claim_token = claimed_job.get("claim_token")
@@ -130,6 +139,12 @@ def start_consumer() -> None:
 
             # Update worker logical clock: L = max(L, incoming_ts) + 1
             worker_clock.receive_event(claimed_job.get("lamport_ts", 0))
+            record_lamport_event(
+                process_id=WORKER_ID,
+                event_type="job_claimed",
+                lamport_ts=worker_clock.get_time(),
+                job_id=job_id,
+            )
             logger.info(
                 "Job %s running | attempt=%d | Lamport L#%d",
                 job_id,
@@ -151,6 +166,13 @@ def start_consumer() -> None:
                 task_output = execute_task(claimed_job["job_type"], payload)
                 elapsed_duration = round(time.perf_counter() - start_time, 4)
                 comp_ts = worker_clock.send_event()
+                record_lamport_event(
+                    process_id=WORKER_ID,
+                    event_type="job_completed",
+                    lamport_ts=comp_ts,
+                    job_id=job_id,
+                    details={"duration": elapsed_duration},
+                )
                 result_data = {
                     "status": "completed",
                     "worker_id": WORKER_ID,
@@ -191,6 +213,13 @@ def start_consumer() -> None:
             except Exception as task_exc:
                 elapsed_duration = round(time.perf_counter() - start_time, 4)
                 fail_ts = worker_clock.send_event()
+                record_lamport_event(
+                    process_id=WORKER_ID,
+                    event_type="job_failed",
+                    lamport_ts=fail_ts,
+                    job_id=job_id,
+                    details={"error": str(task_exc), "duration": elapsed_duration},
+                )
                 logger.error(
                     "Execution failed for job %s after %.4fs: %s",
                     job_id,
@@ -214,6 +243,8 @@ def start_consumer() -> None:
                         job_id,
                         WORKER_ID,
                     )
+            finally:
+                clear_trace_context()
 
     except KeyboardInterrupt:
         logger.info("Worker consumer [%s] shutting down gracefully...", WORKER_ID)
