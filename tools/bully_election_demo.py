@@ -17,6 +17,13 @@ Demonstration Flow:
   6. Later, P4 recovers, immediately initiates election, bullies P3, and reclaims coordinator!
 """
 
+from pathlib import Path
+import sys
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from common.election_bully import BullyCluster
 
 

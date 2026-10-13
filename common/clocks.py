@@ -9,7 +9,7 @@ This module implements:
 """
 
 import threading
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class LamportClock:
@@ -67,8 +67,14 @@ class VectorClock:
          V_i[i] += 1
     """
 
-    def __init__(self, process_id: str, all_process_ids: Optional[List[str]] = None) -> None:
+    def __init__(
+        self,
+        process_id: str,
+        all_process_ids: Optional[List[str]] = None,
+        strict_membership: bool = False,
+    ) -> None:
         self.process_id = process_id
+        self.strict_membership = strict_membership
         self._lock = threading.Lock()
         known_ids = set(all_process_ids or [])
         known_ids.add(process_id)
@@ -78,6 +84,25 @@ class VectorClock:
         """Return a copy of the current vector clock state."""
         with self._lock:
             return dict(self.clock)
+
+    def get_members(self) -> List[str]:
+        """Return the current registered member process IDs."""
+        with self._lock:
+            return sorted(list(self.clock.keys()))
+
+    def add_member(self, new_process_id: str) -> None:
+        """Explicitly register a new participating process in the vector clock space."""
+        with self._lock:
+            if new_process_id not in self.clock:
+                self.clock[new_process_id] = 0
+
+    def remove_member(self, retired_process_id: str) -> None:
+        """Explicitly retire a process from the vector clock space."""
+        if retired_process_id == self.process_id:
+            raise ValueError(f"Process cannot retire itself ({self.process_id}) from its own vector clock.")
+        with self._lock:
+            if retired_process_id in self.clock:
+                del self.clock[retired_process_id]
 
     def local_event(self) -> Dict[str, int]:
         """Rule 1: Local event on this process."""
@@ -93,24 +118,53 @@ class VectorClock:
 
     def receive_event(self, received_vector: Dict[str, int]) -> Dict[str, int]:
         """Rule 3: Receive message with incoming vector."""
+        if not isinstance(received_vector, dict):
+            raise ValueError(f"Received vector must be a dict, got {type(received_vector)}")
+
         with self._lock:
+            if self.strict_membership:
+                unknown = set(received_vector.keys()) - set(self.clock.keys())
+                if unknown:
+                    raise ValueError(
+                        f"Strict membership violation: incoming vector contains unregistered process IDs: {unknown}"
+                    )
+
             for pid, count in received_vector.items():
                 self.clock[pid] = max(self.clock.get(pid, 0), int(count))
             self.clock[self.process_id] = self.clock.get(self.process_id, 0) + 1
             return dict(self.clock)
 
     @staticmethod
-    def compare(v1: Dict[str, int], v2: Dict[str, int]) -> str:
+    def compare(v1: Dict[str, int], v2: Dict[str, int], strict_membership: bool = False) -> str:
         """Compare two vector clock timestamps.
 
-        Returns
-        -------
+        Parameters:
+        -----------
+        v1, v2 : dict
+            Vector clocks mapping process_id -> counter.
+        strict_membership : bool
+            If True, rejects comparisons between vectors with unequal memberships.
+
+        Returns:
+        --------
         'EQUAL'      : v1 == v2
         'BEFORE'     : v1 < v2 (v1 causally precedes v2: v1 -> v2)
         'AFTER'      : v1 > v2 (v2 causally precedes v1: v2 -> v1)
         'CONCURRENT' : v1 || v2 (v1 and v2 are concurrent, independent events)
         """
-        all_keys = set(v1.keys()).union(set(v2.keys()))
+        if not isinstance(v1, dict) or not isinstance(v2, dict):
+            raise ValueError("Both arguments must be dictionary vector clocks")
+
+        keys1 = set(v1.keys())
+        keys2 = set(v2.keys())
+
+        if strict_membership and keys1 != keys2:
+            raise ValueError(
+                f"Incompatible vector memberships: {sorted(list(keys1))} vs {sorted(list(keys2))}. "
+                "Cannot compare vector clocks with unequal process dimensions under strict membership."
+            )
+
+        all_keys = keys1.union(keys2)
         v1_normalized = {k: v1.get(k, 0) for k in all_keys}
         v2_normalized = {k: v2.get(k, 0) for k in all_keys}
 
@@ -129,3 +183,84 @@ class VectorClock:
 
     def __repr__(self) -> str:
         return f"VectorClock(process={self.process_id}, clock={self.get_clock()})"
+
+
+class LamportTraceRecorder:
+    """Thread-safe in-memory recorder for distributed Lamport event causal traces."""
+
+    def __init__(self, max_events: int = 1000) -> None:
+        self.max_events = max_events
+        self._events: List[Dict[str, Any]] = []
+        self._lock = threading.Lock()
+
+    def record_event(
+        self,
+        process_id: str,
+        event_type: str,
+        lamport_ts: int,
+        job_id: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Record a single Lamport clock event in the audit trail."""
+        from datetime import datetime, timezone
+        from uuid import uuid4
+
+        event = {
+            "event_id": str(uuid4()),
+            "process_id": process_id,
+            "event_type": event_type,
+            "job_id": job_id,
+            "lamport_ts": int(lamport_ts),
+            "physical_timestamp": datetime.now(timezone.utc).isoformat(),
+            "details": details or {},
+        }
+        with self._lock:
+            self._events.append(event)
+            if len(self._events) > self.max_events:
+                self._events.pop(0)
+        return event
+
+    def get_events(self, job_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """Retrieve recent Lamport events, optionally filtered by job_id."""
+        with self._lock:
+            if job_id:
+                filtered = [e for e in self._events if e.get("job_id") == job_id]
+            else:
+                filtered = list(self._events)
+            return filtered[-limit:]
+
+    def clear(self) -> None:
+        """Clear all recorded Lamport events."""
+        with self._lock:
+            self._events.clear()
+
+
+# Global trace recorder singleton
+_global_lamport_recorder = LamportTraceRecorder()
+
+
+def record_lamport_event(
+    process_id: str,
+    event_type: str,
+    lamport_ts: int,
+    job_id: Optional[str] = None,
+    details: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Record a Lamport event in the global trace recorder."""
+    return _global_lamport_recorder.record_event(
+        process_id=process_id,
+        event_type=event_type,
+        lamport_ts=lamport_ts,
+        job_id=job_id,
+        details=details,
+    )
+
+
+def get_lamport_traces(job_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    """Retrieve recorded Lamport events from the global trace recorder."""
+    return _global_lamport_recorder.get_events(job_id=job_id, limit=limit)
+
+
+def clear_lamport_traces() -> None:
+    """Clear all recorded Lamport events."""
+    _global_lamport_recorder.clear()

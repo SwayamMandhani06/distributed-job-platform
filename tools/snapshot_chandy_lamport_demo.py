@@ -9,8 +9,14 @@ This script demonstrates:
    Total System Value (Sum of Process States + Channel Messages) is exactly conserved.
 """
 
+from pathlib import Path
 import sys
 from datetime import datetime, timezone
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from common.snapshot_chandy_lamport import ChandyLamportCluster, FIFOChannel
 
 

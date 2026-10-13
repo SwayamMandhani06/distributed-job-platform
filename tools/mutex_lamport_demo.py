@@ -25,11 +25,14 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from common.logging_config import setup_logger
 from common.mutual_exclusion import MutexCluster
 
 logger = setup_logger("mutex_demo")
-BASE_DIR = Path(__file__).resolve().parent.parent
 LEDGER_FILE = BASE_DIR / "shared_audit_ledger.log"
 
 

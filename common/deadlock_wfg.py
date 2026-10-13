@@ -254,3 +254,212 @@ class WaitForGraph:
 
         logger.warning("ABORTED victim process %s to resolve deadlock (freed resources: %s)", victim, held_resources)
         return True
+
+
+class TaskAbortedException(Exception):
+    """Raised when a concurrent task is chosen as a deadlock victim and preempted/aborted."""
+    pass
+
+
+@dataclass
+class DeadlockResolution:
+    """Diagnostic outcome of resolving a detected deadlock."""
+    detected_cycle: List[str]
+    formatted_cycle: str
+    victim_task_id: str
+    freed_resources: List[str]
+    remaining_tasks: List[str]
+    timestamp_iso: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class ConcurrentResourceManager:
+    """Thread-safe resource manager for concurrent tasks with live WFG generation and victim abort.
+
+    Explicit Algorithm Classification:
+    ----------------------------------
+    This is an authoritative **Centralized Wait-For Graph (WFG) Detector with Victim Abort**.
+    It is NOT distributed edge-chasing (Chandy-Misra-Haas). Centralized resource management
+    is the standard architecture for lock managers in databases (e.g. Postgres lock manager)
+    and distributed cluster schedulers.
+    """
+
+    def __init__(self) -> None:
+        import threading
+        from collections import defaultdict
+        self._lock = threading.RLock()
+        self._condition = threading.Condition(self._lock)
+
+        # Resource allocation: resource_id -> holder_task_id (or None)
+        self.resources: Dict[str, Optional[str]] = {}
+        # Waiters: resource_id -> set of waiting task_ids
+        self.waiters: Dict[str, Set[str]] = defaultdict(set)
+        # Task ownership: task_id -> set of held resource_ids
+        self.task_held_resources: Dict[str, Set[str]] = defaultdict(set)
+        # Abort signals: task_id -> bool
+        self.task_abort_flags: Dict[str, bool] = defaultdict(bool)
+        # Task birth/registration: task_id -> float timestamp
+        self.task_timestamps: Dict[str, float] = {}
+
+    def register_resource(self, resource_id: str) -> None:
+        """Register a shared resource."""
+        with self._lock:
+            if resource_id not in self.resources:
+                self.resources[str(resource_id)] = None
+
+    def register_task(self, task_id: str) -> None:
+        """Register a concurrent task."""
+        with self._lock:
+            tid = str(task_id)
+            if tid not in self.task_timestamps:
+                import time
+                self.task_timestamps[tid] = time.time()
+                self.task_abort_flags[tid] = False
+
+    def acquire(self, task_id: str, resource_id: str, timeout_seconds: Optional[float] = None) -> bool:
+        """Request exclusive acquisition of resource_id.
+
+        Blocks the calling task/thread until the resource becomes available or the task is aborted.
+        Raises TaskAbortedException if the task is selected as a deadlock victim.
+        """
+        tid = str(task_id)
+        rid = str(resource_id)
+        import time
+        start_time = time.time()
+
+        with self._condition:
+            self.register_task(tid)
+            self.register_resource(rid)
+
+            if self.task_abort_flags[tid]:
+                raise TaskAbortedException(f"Task {tid} has been aborted by deadlock resolver.")
+
+            # If already held by this task, idempotent success
+            if self.resources[rid] == tid:
+                return True
+
+            # Register as waiter
+            self.waiters[rid].add(tid)
+            logger.info("Task %s is WAITING for resource %s (currently held by %s)", tid, rid, self.resources.get(rid))
+
+            try:
+                while self.resources[rid] is not None and self.resources[rid] != tid:
+                    if self.task_abort_flags[tid]:
+                        raise TaskAbortedException(f"Task {tid} aborted while waiting for {rid}.")
+
+                    if timeout_seconds is not None:
+                        remaining = timeout_seconds - (time.time() - start_time)
+                        if remaining <= 0:
+                            logger.warning("Task %s timed out waiting for resource %s", tid, rid)
+                            return False
+                        self._condition.wait(timeout=remaining)
+                    else:
+                        self._condition.wait()
+
+                    if self.task_abort_flags[tid]:
+                        raise TaskAbortedException(f"Task {tid} aborted while waiting for {rid}.")
+
+                # Acquired!
+                self.resources[rid] = tid
+                self.task_held_resources[tid].add(rid)
+                logger.info("Task %s ACQUIRED resource %s", tid, rid)
+                return True
+            finally:
+                self.waiters[rid].discard(tid)
+
+    def release(self, task_id: str, resource_id: str) -> bool:
+        """Release a previously acquired resource and wake up waiters."""
+        tid = str(task_id)
+        rid = str(resource_id)
+        with self._condition:
+            if self.resources.get(rid) != tid:
+                return False
+
+            self.resources[rid] = None
+            self.task_held_resources[tid].discard(rid)
+            logger.info("Task %s RELEASED resource %s", tid, rid)
+            self._condition.notify_all()
+            return True
+
+    def build_wfg(self) -> WaitForGraph:
+        """Construct a live snapshot of the Wait-For Graph from active allocations and waiters."""
+        with self._lock:
+            wfg = WaitForGraph()
+            # Register all known tasks
+            for tid in self.task_timestamps:
+                wfg.add_process(tid)
+
+            # Record allocations
+            for rid, holder in self.resources.items():
+                if holder:
+                    wfg.resource_allocated_to[rid] = holder
+
+            # Record wait dependencies
+            for rid, waiting_tasks in self.waiters.items():
+                holder = self.resources.get(rid)
+                if holder:
+                    for waiter in waiting_tasks:
+                        wfg.add_wait_dependency(waiter, holder, resource_id=rid)
+
+            return wfg
+
+    def detect_deadlock(self) -> DeadlockReport:
+        """Generate live WFG and evaluate cycles."""
+        wfg = self.build_wfg()
+        return wfg.detect_deadlock()
+
+    def abort_task(self, victim_task_id: str) -> List[str]:
+        """Forcibly preempt/abort a task, releasing all its held resources and waking waiters."""
+        victim = str(victim_task_id)
+        with self._condition:
+            self.task_abort_flags[victim] = True
+            freed = list(self.task_held_resources.get(victim, set()))
+
+            for rid in freed:
+                self.resources[rid] = None
+                self.task_held_resources[victim].discard(rid)
+                logger.warning("FORCIBLY FREED resource %s from aborted task %s", rid, victim)
+
+            # Clear waiter entries for victim
+            for rid in self.waiters:
+                self.waiters[rid].discard(victim)
+
+            self._condition.notify_all()
+            return freed
+
+    def detect_and_resolve(self, victim_policy: str = "lexicographical") -> Optional[DeadlockResolution]:
+        """Detect circular wait in live WFG and resolve by aborting a designated victim task."""
+        with self._condition:
+            report = self.detect_deadlock()
+            if not report.is_deadlocked:
+                return None
+
+            primary_cycle = report.cycles[0]
+            cycle_nodes = primary_cycle[:-1]
+
+            # Victim selection policy
+            if victim_policy == "youngest":
+                # Pick task with latest registration timestamp
+                victim = max(cycle_nodes, key=lambda t: self.task_timestamps.get(t, 0.0))
+            else:
+                # Lexicographical highest ID
+                victim = sorted(cycle_nodes)[-1]
+
+            formatted_path = report.formatted_cycle_paths[0] if report.formatted_cycle_paths else " -> ".join(primary_cycle)
+            freed_resources = self.abort_task(victim)
+            remaining_tasks = [t for t in self.task_timestamps if not self.task_abort_flags[t]]
+
+            logger.error(
+                "DEADLOCK RESOLVED: Cycle '%s' broken by aborting victim '%s' (freed: %s)",
+                formatted_path,
+                victim,
+                freed_resources,
+            )
+
+            return DeadlockResolution(
+                detected_cycle=primary_cycle,
+                formatted_cycle=formatted_path,
+                victim_task_id=victim,
+                freed_resources=freed_resources,
+                remaining_tasks=remaining_tasks,
+            )
+

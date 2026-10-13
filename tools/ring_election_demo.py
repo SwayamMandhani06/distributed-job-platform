@@ -16,6 +16,13 @@ Demonstration Flow:
   9. P2 is elected Coordinator and announcement circulates the ring.
 """
 
+from pathlib import Path
+import sys
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from common.election_ring import RingCluster
 
 

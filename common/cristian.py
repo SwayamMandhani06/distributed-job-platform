@@ -39,7 +39,13 @@ import time
 import requests
 
 
-def compute_cristian_sync(t0: float, t_server: float, t1: float) -> Dict[str, Any]:
+def compute_cristian_sync(
+    t0: float,
+    t_server: float,
+    t1: float,
+    t_server_recv: Optional[float] = None,
+    t_server_send: Optional[float] = None,
+) -> Dict[str, Any]:
     """Calculate estimated clock offset and uncertainty given Cristian's timestamps.
 
     Parameters:
@@ -50,6 +56,10 @@ def compute_cristian_sync(t0: float, t_server: float, t1: float) -> Dict[str, An
         Server physical time captured in the response.
     t1 : float
         Client physical time upon response reception.
+    t_server_recv : Optional[float]
+        Optional server physical time when request arrived at server.
+    t_server_send : Optional[float]
+        Optional server physical time when response was transmitted by server.
 
     Returns:
     --------
@@ -58,23 +68,41 @@ def compute_cristian_sync(t0: float, t_server: float, t1: float) -> Dict[str, An
     if t1 < t0:
         raise ValueError(f"Receive time t1 ({t1}) cannot be earlier than send time t0 ({t0})")
 
-    rtt = t1 - t0
-    half_rtt = rtt / 2.0
-    estimated_server_time_at_t1 = t_server + half_rtt
-    offset = t_server - ((t0 + t1) / 2.0)
+    total_rtt = t1 - t0
+    server_processing_time = 0.0
+    if t_server_recv is not None and t_server_send is not None:
+        if t_server_send >= t_server_recv:
+            server_processing_time = t_server_send - t_server_recv
+
+    # Network round trip delay isolating server processing time
+    net_rtt = max(0.0, total_rtt - server_processing_time)
+    half_net_rtt = net_rtt / 2.0
+
+    # If server_send is present, estimate server time at client receive t1
+    reference_server_time = t_server_send if t_server_send is not None else t_server
+    estimated_server_time_at_t1 = reference_server_time + half_net_rtt
+    offset = reference_server_time + half_net_rtt - t1
 
     return {
         "t0_client_send": round(t0, 6),
         "t_server_timestamp": round(t_server, 6),
+        "t_server_receive": round(t_server_recv, 6) if t_server_recv is not None else None,
+        "t_server_send": round(t_server_send, 6) if t_server_send is not None else None,
         "t1_client_receive": round(t1, 6),
-        "round_trip_delay_seconds": round(rtt, 6),
+        "total_round_trip_seconds": round(total_rtt, 6),
+        "server_processing_seconds": round(server_processing_time, 6),
+        "network_round_trip_seconds": round(net_rtt, 6),
+        "round_trip_delay_seconds": round(total_rtt, 6),
         "estimated_server_time_at_t1": round(estimated_server_time_at_t1, 6),
         "clock_offset_seconds": round(offset, 6),
-        "uncertainty_seconds": round(half_rtt, 6),
+        "uncertainty_seconds": round(half_net_rtt, 6),
+        "actual_os_clock_adjusted": False,
+        "simulated_clock_offset": True,
         "synchronization_status": "synchronized",
         "notes": (
-            "Offset theta indicates amount to adjust client clock (client + theta = server). "
-            "Assumes symmetric network delay."
+            "Calculated software clock offset theta. The operating system physical clock was "
+            "NOT modified (modifying physical OS clock requires root/kernel privileges and could "
+            "corrupt host timing). Software adjustment formula: synchronized_time = local_time + offset."
         ),
     }
 
@@ -83,20 +111,75 @@ def query_cristian_server(
     server_url: str,
     time_source: Optional[Callable[[], float]] = None,
     timeout_seconds: float = 5.0,
+    injected_delay_seconds: float = 0.0,
+    injected_jitter_seconds: float = 0.0,
+    local_clock_offset_seconds: float = 0.0,
 ) -> Dict[str, Any]:
     """Perform a live Cristian clock synchronization request against a server endpoint.
 
-    Expects server endpoint (e.g. GET {server_url}/api/time) returning JSON:
-        {"server_time": float, ...}
+    Parameters:
+    -----------
+    server_url : str
+        Base URL of the time coordinator.
+    time_source : Optional[Callable[[], float]]
+        Callable returning current physical time.
+    timeout_seconds : float
+        HTTP request timeout.
+    injected_delay_seconds : float
+        Simulated network delay injected before and after transmission.
+    injected_jitter_seconds : float
+        Simulated random jitter added to transit latency.
+    local_clock_offset_seconds : float
+        Simulated local clock drift offset relative to true time.
     """
-    get_time = time_source or time.time
+    raw_time = time_source or time.time
+    def get_time() -> float:
+        return raw_time() + local_clock_offset_seconds
+
     t0 = get_time()
+
+    # Simulate outbound network delay/jitter
+    if injected_delay_seconds > 0 or injected_jitter_seconds > 0:
+        time.sleep(injected_delay_seconds / 2.0 + injected_jitter_seconds)
+
     endpoint = f"{server_url.rstrip('/')}/api/time"
-    response = requests.get(endpoint, timeout=timeout_seconds)
+    try:
+        response = requests.get(endpoint, timeout=timeout_seconds)
+    except requests.RequestException as req_err:
+        raise ConnectionError(f"Failed to reach time server at {endpoint}: {req_err}") from req_err
+
+    # Simulate inbound network delay
+    if injected_delay_seconds > 0:
+        time.sleep(injected_delay_seconds / 2.0)
+
     t1 = get_time()
 
     response.raise_for_status()
-    payload = response.json()
-    t_server = float(payload["server_time"])
+    if isinstance(getattr(response, "status_code", None), int) and response.status_code != 200:
+        raise ValueError(
+            f"Time server returned error HTTP {response.status_code}: {response.text[:200]}"
+        )
 
-    return compute_cristian_sync(t0=t0, t_server=t_server, t1=t1)
+    try:
+        payload = response.json()
+    except Exception as parse_err:
+        raise ValueError(f"Time server response is not valid JSON: {response.text[:200]}") from parse_err
+
+    if "server_time" not in payload:
+        raise ValueError(f"Invalid time server response: missing 'server_time' in {payload}")
+
+    try:
+        t_server = float(payload["server_time"])
+    except (ValueError, TypeError) as conv_err:
+        raise ValueError(f"Invalid 'server_time' value in response: {payload.get('server_time')}") from conv_err
+
+    t_recv = float(payload["server_receive_time"]) if "server_receive_time" in payload else None
+    t_send = float(payload["server_send_time"]) if "server_send_time" in payload else None
+
+    return compute_cristian_sync(
+        t0=t0,
+        t_server=t_server,
+        t1=t1,
+        t_server_recv=t_recv,
+        t_server_send=t_send,
+    )

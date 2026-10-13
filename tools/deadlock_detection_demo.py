@@ -9,7 +9,13 @@ This script demonstrates:
 5. Educational Analysis: Centralized WFG vs. Distributed Chandy-Misra-Haas edge chasing.
 """
 
+from pathlib import Path
 import sys
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from common.deadlock_wfg import WaitForGraph
 
 

@@ -18,8 +18,14 @@ Usage:
 """
 
 import argparse
+from pathlib import Path
 import sys
 import time
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from common.cristian import compute_cristian_sync, query_cristian_server
 
 
@@ -65,20 +71,44 @@ def run_synthetic_demo() -> None:
     print("=" * 75)
 
 
-def run_live_demo(url: str) -> None:
+def run_live_demo(
+    url: str,
+    delay: float = 0.0,
+    jitter: float = 0.0,
+    local_offset: float = 0.0,
+) -> None:
     print("=" * 75)
-    print(f"  Cristian's Clock Synchronization -- Live Server Query ({url})")
+    print(f"  Cristian's Clock Synchronization -- Live Process Query ({url})")
     print("=" * 75)
+    if delay > 0 or jitter > 0 or local_offset != 0:
+        print(f"Injected Test Parameters: delay={delay*1000:.1f}ms, jitter={jitter*1000:.1f}ms, local_offset={local_offset:+.3f}s")
     try:
-        results = query_cristian_server(server_url=url, timeout_seconds=3.0)
+        results = query_cristian_server(
+            server_url=url,
+            timeout_seconds=5.0,
+            injected_delay_seconds=delay,
+            injected_jitter_seconds=jitter,
+            local_clock_offset_seconds=local_offset,
+        )
         print(f"Success! Time response received from coordinator:\n")
-        print(f"  [T0] Client Request Sent    : {results['t0_client_send']:.6f}")
-        print(f"  [Ts] Server Time Received   : {results['t_server_timestamp']:.6f}")
-        print(f"  [T1] Client Response Received: {results['t1_client_receive']:.6f}")
+        print(f"  [T0] Client Request Sent      : {results['t0_client_send']:.6f}s")
+        if results.get("t_server_receive") is not None:
+            print(f"  [Tr] Server Received Time     : {results['t_server_receive']:.6f}s")
+        print(f"  [Ts] Server Timestamp         : {results['t_server_timestamp']:.6f}s")
+        if results.get("t_server_send") is not None:
+            print(f"  [Tx] Server Transmit Time     : {results['t_server_send']:.6f}s")
+        print(f"  [T1] Client Response Received : {results['t1_client_receive']:.6f}s")
         print("-" * 75)
-        print(f"  Measured Round-Trip Delay   : {results['round_trip_delay_seconds'] * 1000:.3f} ms")
-        print(f"  Estimated Clock Offset (theta)  : {results['clock_offset_seconds']:+.6f} seconds")
-        print(f"  Accuracy Bound (+/- RTT/2)      : +/- {results['uncertainty_seconds'] * 1000:.3f} ms")
+        print(f"  Total Round-Trip Delay (RTT)  : {results['total_round_trip_seconds'] * 1000:.3f} ms")
+        if results.get("server_processing_seconds", 0) > 0:
+            print(f"  Server Internal Processing    : {results['server_processing_seconds'] * 1000:.3f} ms")
+            print(f"  Isolated Network RTT          : {results['network_round_trip_seconds'] * 1000:.3f} ms")
+        print(f"  Estimated Clock Offset (theta): {results['clock_offset_seconds']:+.6f} seconds")
+        print(f"  Uncertainty Bound (+/- RTT/2) : +/- {results['uncertainty_seconds'] * 1000:.3f} ms")
+        print(f"  Simulated Clock Offset        : {results['simulated_clock_offset']}")
+        print(f"  Actual OS Clock Modified      : {results['actual_os_clock_adjusted']}")
+        print("-" * 75)
+        print(f"Notes: {results['notes']}")
         print("=" * 75)
     except Exception as exc:
         print(f"[Notice] Could not connect to live server at {url}: {exc}")
@@ -90,12 +120,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Cristian's Physical Clock Synchronization Demo")
     parser.add_argument("--url", default="http://localhost:8000", help="Base URL of coordinator service")
     parser.add_argument("--simulate", action="store_true", help="Run deterministic synthetic calculation")
+    parser.add_argument("--delay", type=float, default=0.0, help="Injected network delay in seconds")
+    parser.add_argument("--jitter", type=float, default=0.0, help="Injected network jitter in seconds")
+    parser.add_argument("--local-offset", type=float, default=0.0, help="Simulated client local clock offset in seconds")
     args = parser.parse_args()
 
     if args.simulate:
         run_synthetic_demo()
     else:
-        run_live_demo(args.url)
+        run_live_demo(
+            url=args.url,
+            delay=args.delay,
+            jitter=args.jitter,
+            local_offset=args.local_offset,
+        )
 
 
 if __name__ == "__main__":

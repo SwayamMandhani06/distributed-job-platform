@@ -260,3 +260,129 @@ class TestCristianClockSynchronization:
         assert pytest.approx(result["round_trip_delay_seconds"], abs=1e-4) == 0.05
         assert pytest.approx(result["clock_offset_seconds"], abs=1e-4) == 5.0
         assert pytest.approx(result["uncertainty_seconds"], abs=1e-4) == 0.025
+        assert result["actual_os_clock_adjusted"] is False
+        assert result["simulated_clock_offset"] is True
+
+    def test_injected_delay_and_jitter(self):
+        """Test query_cristian_server with simulated network delay and jitter."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "server_time": 102.5,
+            "server_receive_time": 102.49,
+            "server_send_time": 102.50,
+        }
+
+        with patch("requests.get", return_value=mock_response):
+            result = query_cristian_server(
+                server_url="http://localhost:8000",
+                injected_delay_seconds=0.04,
+                injected_jitter_seconds=0.01,
+            )
+        assert result["round_trip_delay_seconds"] >= 0.04
+        assert result["actual_os_clock_adjusted"] is False
+        assert result["simulated_clock_offset"] is True
+
+    def test_invalid_server_responses(self):
+        """Test rejection of malformed or error server responses."""
+        # Case 1: Missing server_time
+        mock_bad_json = MagicMock()
+        mock_bad_json.status_code = 200
+        mock_bad_json.json.return_value = {"error": "no time here"}
+
+        with patch("requests.get", return_value=mock_bad_json):
+            with pytest.raises(ValueError, match="missing 'server_time'"):
+                query_cristian_server("http://localhost:8000")
+
+        # Case 2: Non-JSON response
+        mock_bad_text = MagicMock()
+        mock_bad_text.status_code = 200
+        mock_bad_text.json.side_effect = ValueError("No JSON")
+        mock_bad_text.text = "Internal error"
+
+        with patch("requests.get", return_value=mock_bad_text):
+            with pytest.raises(ValueError, match="not valid JSON"):
+                query_cristian_server("http://localhost:8000")
+
+
+class TestVectorClockMembershipAndValidation:
+    """Tests for Vector Clock explicit membership management and validation (Phase 3)."""
+
+    def test_add_and_remove_member(self):
+        vc = VectorClock("P1", ["P1", "P2"])
+        assert vc.get_members() == ["P1", "P2"]
+
+        # Add member explicitly
+        vc.add_member("P3")
+        assert vc.get_members() == ["P1", "P2", "P3"]
+        assert vc.get_clock()["P3"] == 0
+
+        # Remove member explicitly
+        vc.remove_member("P2")
+        assert vc.get_members() == ["P1", "P3"]
+        assert "P2" not in vc.get_clock()
+
+        # Cannot retire self
+        with pytest.raises(ValueError, match="cannot retire itself"):
+            vc.remove_member("P1")
+
+    def test_strict_membership_comparison_rejects_mismatch(self):
+        v1 = {"P1": 1, "P2": 0}
+        v2 = {"P1": 1, "P2": 0, "P3": 1}
+
+        # Non-strict comparison allows unioned comparison
+        rel = VectorClock.compare(v1, v2, strict_membership=False)
+        assert rel in ("BEFORE", "CONCURRENT")
+
+        # Strict comparison rejects mismatched process dimensions
+        with pytest.raises(ValueError, match="Incompatible vector memberships"):
+            VectorClock.compare(v1, v2, strict_membership=True)
+
+    def test_strict_membership_receive_rejects_unregistered_process(self):
+        vc = VectorClock("P1", ["P1", "P2"], strict_membership=True)
+        # Receiving from unknown process P4 must be rejected under strict membership
+        with pytest.raises(ValueError, match="Strict membership violation"):
+            vc.receive_event({"P1": 1, "P4": 2})
+
+    def test_invalid_vector_inputs(self):
+        with pytest.raises(ValueError, match="Both arguments must be dictionary"):
+            VectorClock.compare("invalid", {"P1": 1})
+
+
+class TestLamportTraceRecorderAndCausalChain:
+    """Tests for Lamport trace recording and strict causal ordering verification (Phase 3)."""
+
+    def test_trace_recording_and_retrieval(self):
+        from common.clocks import record_lamport_event, get_lamport_traces, clear_lamport_traces
+
+        clear_lamport_traces()
+        job_id = "test-job-causal-123"
+
+        # Causal sequence: submit (L1) -> claim (L2) -> execute (L3) -> complete (L4)
+        clock_sched = LamportClock()
+        clock_worker = LamportClock()
+
+        # Event 1: Submit on scheduler
+        e1_ts = clock_sched.send_event()
+        record_lamport_event("scheduler", "job_submitted", e1_ts, job_id=job_id)
+
+        # Event 2: Claim on worker (receives e1)
+        clock_worker.receive_event(e1_ts)
+        e2_ts = clock_worker.get_time()
+        record_lamport_event("worker-1", "job_claimed", e2_ts, job_id=job_id)
+
+        # Event 3: Local execution on worker
+        e3_ts = clock_worker.tick()
+        record_lamport_event("worker-1", "job_executing", e3_ts, job_id=job_id)
+
+        # Event 4: Complete and ACK
+        e4_ts = clock_worker.send_event()
+        record_lamport_event("worker-1", "job_completed", e4_ts, job_id=job_id)
+
+        traces = get_lamport_traces(job_id=job_id)
+        assert len(traces) == 4
+
+        # Verify strict Lamport ordering: e1 -> e2 -> e3 -> e4 implies L(e1) < L(e2) < L(e3) < L(e4)
+        ts_list = [t["lamport_ts"] for t in traces]
+        assert ts_list[0] < ts_list[1] < ts_list[2] < ts_list[3]
+        assert ts_list == [1, 2, 3, 4]
