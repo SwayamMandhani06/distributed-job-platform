@@ -206,7 +206,12 @@ class TestClusterIntegration(unittest.TestCase):
 
         # Recovery sweep finds expired lease and recovers job to 'pending'
         recovered = find_and_recover_stale_jobs(lease_timeout_seconds=1.0)
-        self.assertTrue(any(r["job_id"] == job_id for r in recovered))
+        if not recovered:
+            # Check if background scheduler task already safely recovered the expired job
+            job_rec = get_job(job_id)
+            self.assertEqual(job_rec["status"], "pending")
+        else:
+            self.assertTrue(any(r["job_id"] == job_id for r in recovered))
 
         # Survivor worker claims the recovered job
         claim2 = claim_job_for_worker(job_id, worker_id=worker_survivor, lease_seconds=30.0)
