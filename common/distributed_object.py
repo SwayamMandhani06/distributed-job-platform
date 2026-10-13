@@ -39,11 +39,17 @@ How Remote Invocations Differ from Local Method Calls:
 * Latency: Local calls take nanoseconds; remote calls incur network latency (milliseconds).
 """
 
+import argparse
 import json
+import socket
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from urllib import request as url_request
+from urllib.error import HTTPError, URLError
 from uuid import uuid4
 
 from common.logging_config import setup_logger
@@ -133,20 +139,28 @@ class RemoteInvocationResponse:
 
 
 class RemoteCommunicationChannel:
-    """Simulates network transport between client proxy and server skeleton.
+    """Network transport between client proxy and server skeleton.
 
-    Allows configurable network latency, simulated packet drop, and timeout thresholds.
+    Supports two operational modes:
+    1. Real Networked RPC Mode: when initialized with server_url (e.g. 'http://127.0.0.1:9640').
+       Transmits HTTP POST requests over real TCP sockets with connection timeouts,
+       socket error mapping, and remote exception propagation.
+    2. In-Process Simulation Mode: when server_skeleton is directly bound.
+       Simulates network latency, packet loss, and timeout thresholds in-memory.
     """
 
     def __init__(
         self,
+        server_url: Optional[str] = None,
         simulated_latency_seconds: float = 0.0,
         packet_loss_probability: float = 0.0,
         default_timeout_seconds: float = 2.0,
+        timeout_seconds: Optional[float] = None,
     ) -> None:
+        self.server_url = server_url.rstrip("/") if server_url else None
         self.simulated_latency = float(simulated_latency_seconds)
         self.packet_loss_prob = float(packet_loss_probability)
-        self.default_timeout = float(default_timeout_seconds)
+        self.default_timeout = float(timeout_seconds if timeout_seconds is not None else default_timeout_seconds)
         self.server_skeleton: Optional["RemoteServerSkeleton"] = None
         self.transmitted_packets: List[Dict[str, Any]] = []
 
@@ -161,6 +175,54 @@ class RemoteCommunicationChannel:
         """Transmit serialized request over communication channel and return serialized response."""
         effective_timeout = timeout_seconds if timeout_seconds is not None else self.default_timeout
 
+        if self.server_url:
+            # REAL NETWORK RPC OVER TCP/HTTP SOCKET
+            req = RemoteInvocationRequest.deserialize(serialized_request)
+            self.transmitted_packets.append({
+                "direction": "CLIENT_TO_SERVER",
+                "invocation_id": req.invocation_id,
+                "method": f"{req.service_name}.{req.method_name}",
+                "bytes": len(serialized_request),
+                "url": f"{self.server_url}/rpc",
+            })
+
+            data_bytes = serialized_request.encode("utf-8")
+            http_req = url_request.Request(
+                f"{self.server_url}/rpc",
+                data=data_bytes,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with url_request.urlopen(http_req, timeout=effective_timeout) as resp:
+                    resp_bytes = resp.read()
+                    resp_str = resp_bytes.decode("utf-8")
+                    self.transmitted_packets.append({
+                        "direction": "SERVER_TO_CLIENT",
+                        "invocation_id": req.invocation_id,
+                        "method": f"{req.service_name}.{req.method_name}",
+                        "bytes": len(resp_str),
+                    })
+                    return resp_str
+            except socket.timeout:
+                raise RemoteTimeoutError(f"Remote invocation timed out after {effective_timeout:.2f}s.")
+            except HTTPError as err:
+                # Server returned structured HTTP error (e.g. 400 or 500)
+                try:
+                    err_body = err.read().decode("utf-8")
+                    return err_body
+                except Exception:
+                    raise RemoteCommunicationError(f"Remote server returned HTTP {err.code}: {err.reason}")
+            except URLError as exc:
+                if isinstance(exc.reason, socket.timeout) or "timed out" in str(exc).lower():
+                    raise RemoteTimeoutError(f"Remote invocation timed out after {effective_timeout:.2f}s.")
+                raise RemoteCommunicationError(f"Failed to communicate with remote server at {self.server_url}: {exc.reason}")
+            except Exception as exc:
+                if "timed out" in str(exc).lower():
+                    raise RemoteTimeoutError(f"Remote invocation timed out after {effective_timeout:.2f}s.")
+                raise RemoteCommunicationError(f"Network transport error: {exc}")
+
+        # In-process simulation mode
         if self.simulated_latency > effective_timeout:
             raise RemoteTimeoutError(
                 f"Invocation timed out: channel latency {self.simulated_latency:.2f}s "
@@ -392,10 +454,16 @@ class JobManagementServant:
         "submit_job",
         "get_job_status",
         "calculate_workload_metrics",
+        "simulate_slow_task",
     }
 
     def __init__(self) -> None:
         self.jobs: Dict[str, Dict[str, Any]] = {}
+
+    def simulate_slow_task(self, sleep_seconds: float = 0.5) -> Dict[str, Any]:
+        """Remote method: sleeps to test client deadline and timeout enforcement."""
+        time.sleep(float(sleep_seconds))
+        return {"status": "completed_slowly", "slept": sleep_seconds}
 
     def submit_job(self, job_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Remote method: submit a job to the remote server."""
@@ -428,3 +496,130 @@ class JobManagementServant:
     def _internal_helper(self) -> str:
         """Internal private method — not exposed remotely."""
         return "internal_secret_token"
+
+
+class RemoteRPCHTTPHandler(BaseHTTPRequestHandler):
+    """HTTP request handler for real networked RPC server."""
+
+    skeleton: Optional[RemoteServerSkeleton] = None
+
+    def log_message(self, format: str, *args: Any) -> None:
+        pass
+
+    def _send_json(self, status_code: int, data: Dict[str, Any]) -> None:
+        body = json.dumps(data).encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        if self.path == "/health":
+            self._send_json(200, {
+                "status": "ok",
+                "services": list(self.skeleton.registered_services.keys()) if self.skeleton else [],
+            })
+        elif self.path == "/services":
+            services_info = {}
+            if self.skeleton:
+                for s_name, allowed in self.skeleton.allowed_methods.items():
+                    services_info[s_name] = sorted(list(allowed))
+            self._send_json(200, {"services": services_info})
+        else:
+            self._send_json(404, {"error": "Not found"})
+
+    def do_POST(self) -> None:
+        if self.path != "/rpc":
+            self._send_json(404, {"error": "Unknown RPC endpoint"})
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length <= 0:
+            self._send_json(400, {
+                "invocation_id": "malformed",
+                "success": False,
+                "error_type": "MalformedRequestError",
+                "error_message": "Empty request body.",
+            })
+            return
+
+        raw_body = self.rfile.read(content_length).decode("utf-8")
+        try:
+            d = json.loads(raw_body)
+            if not isinstance(d, dict) or "service_name" not in d or "method_name" not in d:
+                self._send_json(400, {
+                    "invocation_id": d.get("invocation_id", "malformed") if isinstance(d, dict) else "malformed",
+                    "success": False,
+                    "error_type": "MalformedRequestError",
+                    "error_message": "Missing required fields: service_name and method_name are required.",
+                })
+                return
+        except Exception as exc:
+            self._send_json(400, {
+                "invocation_id": "malformed",
+                "success": False,
+                "error_type": "MalformedRequestError",
+                "error_message": f"Malformed JSON: {exc}",
+            })
+            return
+
+        if self.skeleton is None:
+            self._send_json(503, {
+                "invocation_id": d.get("invocation_id", "unknown"),
+                "success": False,
+                "error_type": "ServerNotReadyError",
+                "error_message": "Server skeleton is uninitialized.",
+            })
+            return
+
+        resp_str = self.skeleton.dispatch(raw_body)
+        resp_data = json.loads(resp_str)
+        self._send_json(200, resp_data)
+
+
+class NetworkedRemoteServer:
+    """Runs a standalone HTTP/TCP RPC server hosting registered remote objects."""
+
+    def __init__(self, port: int, skeleton: Optional[RemoteServerSkeleton] = None) -> None:
+        self.port = int(port)
+        self.skeleton = skeleton or RemoteServerSkeleton()
+        self.server: Optional[HTTPServer] = None
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        handler_class = type("BoundRPCHandler", (RemoteRPCHTTPHandler,), {"skeleton": self.skeleton})
+        self.server = HTTPServer(("127.0.0.1", self.port), handler_class)
+        self._thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self._thread.start()
+        logger.info("NetworkedRemoteServer running on port %d...", self.port)
+
+    def shutdown(self) -> None:
+        if self.server:
+            self.server.shutdown()
+            self.server.server_close()
+            logger.info("NetworkedRemoteServer on port %d stopped.", self.port)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Standalone Networked Remote Object RPC Server.")
+    parser.add_argument("--port", type=int, default=9640, help="Port to listen on")
+    args = parser.parse_args()
+
+    skeleton = RemoteServerSkeleton()
+    servant = JobManagementServant()
+    skeleton.register_service("JobService", servant)
+
+    server = NetworkedRemoteServer(port=args.port, skeleton=skeleton)
+    server.start()
+    print(f"Networked Remote Object RPC Server listening on port {args.port}...")
+    try:
+        while True:
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        server.shutdown()
+
+
+if __name__ == "__main__":
+    main()
+

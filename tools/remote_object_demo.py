@@ -7,9 +7,13 @@ This script demonstrates:
 3. Remote exception propagation across address space boundaries.
 4. Network timeout simulation and error handling.
 5. Contrast between local method calls and remote procedure invocations.
-"""
-
+from pathlib import Path
 import sys
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from common.distributed_object import (
     JobManagementServant,
     RemoteClientProxy,

@@ -13,9 +13,14 @@ Usage:
 """
 
 import logging
+from pathlib import Path
 import sys
 import time
 from typing import Any, Dict
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 from common.serverless_runtime import FunctionContext, ServerlessRuntime
 
