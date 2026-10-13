@@ -39,13 +39,21 @@ WHY raw SQL instead of an ORM?
 """
 
 import json
+import os
+import re
 import sqlite3
+import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from uuid import uuid4
 
-from common.config import DB_PATH, SQLITE_TIMEOUT_SECONDS
+from common.config import (
+    DB_PATH,
+    SQLITE_TIMEOUT_SECONDS,
+    POSTGRES_CONNECT_TIMEOUT_SECONDS,
+    get_db_path,
+)
 from common.logging_config import setup_logger
 
 logger = setup_logger("database")
@@ -56,9 +64,124 @@ class StaleLeaderError(Exception):
     pass
 
 
-def _get_connection(timeout: float = SQLITE_TIMEOUT_SECONDS) -> sqlite3.Connection:
-    """Open a connection to the SQLite database with Row factory, WAL mode, and busy timeout."""
-    conn = sqlite3.connect(str(DB_PATH), timeout=timeout)
+class DummyCursor:
+    """No-op cursor returned for transaction start commands under PostgreSQL."""
+    rowcount = 0
+
+    def fetchone(self) -> None:
+        return None
+
+    def fetchall(self) -> List[Any]:
+        return []
+
+
+class PostgresConnectionWrapper:
+    """Wrapper around psycopg2 connection providing sqlite3-compatible execution semantics."""
+
+    def __init__(self, raw_conn: Any):
+        self._conn = raw_conn
+
+    def execute(self, sql: str, params: Optional[Union[Tuple[Any, ...], List[Any]]] = None) -> Any:
+        clean_sql = sql.strip()
+        if clean_sql.upper().startswith("BEGIN"):
+            # PostgreSQL connections in psycopg2 are already within an active transaction block
+            return DummyCursor()
+
+        if clean_sql.upper().startswith("PRAGMA"):
+            # Pragmas are SQLite-specific; provide compatible cursor simulation
+            class PragmaCursor:
+                rowcount = 1
+
+                def fetchone(self) -> Any:
+                    return (30000,)
+
+                def fetchall(self) -> List[Any]:
+                    return [(30000,)]
+
+            return PragmaCursor()
+
+        # 1. Translate scalar MAX(a, b) to standard GREATEST(a, b)
+        pg_sql = re.sub(
+            r"\bMAX\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)",
+            r"GREATEST(\1, \2)",
+            sql,
+            flags=re.IGNORECASE,
+        )
+
+        # 2. Translate SQLite null-safe token comparison to PostgreSQL compatible condition
+        pg_sql = pg_sql.replace(
+            "(claim_token IS ? OR claim_token = ?)",
+            "((%s::text IS NULL AND claim_token IS NULL) OR claim_token = %s)",
+        )
+
+        # 3. Translate ? parameter placeholders to %s
+        pg_sql = pg_sql.replace("?", "%s")
+
+        from psycopg2.extras import RealDictCursor
+        cur = self._conn.cursor(cursor_factory=RealDictCursor)
+        if params is not None:
+            cur.execute(pg_sql, tuple(params))
+        else:
+            cur.execute(pg_sql)
+        return cur
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def __enter__(self) -> "PostgresConnectionWrapper":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        if exc_type is not None:
+            self.rollback()
+        else:
+            self.commit()
+        self.close()
+
+
+def _get_postgres_connection(
+    dsn: str,
+    timeout: float = 10.0,
+    max_retries: int = 5,
+    retry_delay: float = 1.0,
+) -> Any:
+    """Establish connection to PostgreSQL with retry backoff for container startup readiness."""
+    import psycopg2
+    deadline = time.time() + timeout
+    last_err: Optional[Exception] = None
+    for attempt in range(max_retries):
+        try:
+            return psycopg2.connect(dsn, connect_timeout=int(timeout))
+        except psycopg2.OperationalError as exc:
+            last_err = exc
+            if time.time() >= deadline:
+                break
+            time.sleep(retry_delay)
+    logger.error("Failed to connect to PostgreSQL at %s: %s", dsn, last_err)
+    if last_err:
+        raise last_err
+    raise RuntimeError(f"Could not connect to PostgreSQL at {dsn}")
+
+
+def is_postgres_configured() -> bool:
+    """Return True if DATABASE_URL is set in environment, indicating authoritative PostgreSQL persistence."""
+    return bool(os.getenv("DATABASE_URL"))
+
+
+def _get_connection(db_path: Optional[Path] = None, timeout: float = SQLITE_TIMEOUT_SECONDS) -> Any:
+    """Open a connection to PostgreSQL (if DATABASE_URL is set) or SQLite with WAL mode."""
+    if db_path is None and os.getenv("DATABASE_URL"):
+        raw_conn = _get_postgres_connection(os.environ["DATABASE_URL"], timeout=POSTGRES_CONNECT_TIMEOUT_SECONDS)
+        return PostgresConnectionWrapper(raw_conn)
+
+    target_path = db_path or get_db_path()
+    conn = sqlite3.connect(str(target_path), timeout=timeout)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     busy_timeout_ms = int(timeout * 1000)
@@ -66,28 +189,104 @@ def _get_connection(timeout: float = SQLITE_TIMEOUT_SECONDS) -> sqlite3.Connecti
     return conn
 
 
-def _migrate_db(conn: sqlite3.Connection) -> None:
-    """Idempotently add Phase 2 columns to jobs table if they do not exist."""
-    cursor = conn.execute("PRAGMA table_info(jobs)")
-    existing_cols = {row["name"] for row in cursor.fetchall()}
+def _migrate_db(conn: Any) -> None:
+    """Idempotently apply schema migrations, version tracking, and performance indexes."""
+    # 1. Schema migrations table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version     INTEGER PRIMARY KEY,
+            name        TEXT NOT NULL,
+            applied_at  TEXT NOT NULL
+        )
+    """)
 
-    columns_to_add = [
-        ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
-        ("max_retries", "INTEGER NOT NULL DEFAULT 3"),
-        ("claimed_at", "TEXT"),
-        ("lease_expires_at", "TEXT"),
-        ("claim_token", "TEXT"),
-        ("lamport_ts", "INTEGER NOT NULL DEFAULT 0"),
+    is_pg = isinstance(conn, PostgresConnectionWrapper)
+
+    if not is_pg:
+        # SQLite schema inspection & migrations
+        cursor_jobs = conn.execute("PRAGMA table_info(jobs)")
+        existing_jobs_cols = {row["name"] for row in cursor_jobs.fetchall()}
+
+        jobs_columns_to_add = [
+            ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("max_retries", "INTEGER NOT NULL DEFAULT 3"),
+            ("claimed_at", "TEXT"),
+            ("lease_expires_at", "TEXT"),
+            ("claim_token", "TEXT"),
+            ("lamport_ts", "INTEGER NOT NULL DEFAULT 0"),
+        ]
+        for col_name, col_def in jobs_columns_to_add:
+            if col_name not in existing_jobs_cols:
+                conn.execute(f"ALTER TABLE jobs ADD COLUMN {col_name} {col_def}")
+                logger.info("Migrated jobs table: added column %s", col_name)
+
+        cursor_workers = conn.execute("PRAGMA table_info(workers)")
+        existing_workers_cols = {row["name"] for row in cursor_workers.fetchall()}
+
+        workers_columns_to_add = [
+            ("pid", "INTEGER"),
+            ("startup_time", "TEXT"),
+            ("current_job_id", "TEXT"),
+        ]
+        for col_name, col_def in workers_columns_to_add:
+            if col_name not in existing_workers_cols:
+                conn.execute(f"ALTER TABLE workers ADD COLUMN {col_name} {col_def}")
+                logger.info("Migrated workers table: added column %s", col_name)
+    else:
+        # PostgreSQL schema inspection & migrations
+        cursor_jobs = conn.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'jobs'")
+        existing_jobs_cols = {row["column_name"] for row in cursor_jobs.fetchall()}
+
+        jobs_columns_to_add = [
+            ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("max_retries", "INTEGER NOT NULL DEFAULT 3"),
+            ("claimed_at", "TEXT"),
+            ("lease_expires_at", "TEXT"),
+            ("claim_token", "TEXT"),
+            ("lamport_ts", "BIGINT NOT NULL DEFAULT 0"),
+        ]
+        for col_name, col_def in jobs_columns_to_add:
+            if col_name not in existing_jobs_cols:
+                conn.execute(f"ALTER TABLE jobs ADD COLUMN IF NOT EXISTS {col_name} {col_def}")
+                logger.info("Migrated PostgreSQL jobs table: added column %s", col_name)
+
+        cursor_workers = conn.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'workers'")
+        existing_workers_cols = {row["column_name"] for row in cursor_workers.fetchall()}
+
+        workers_columns_to_add = [
+            ("pid", "INTEGER"),
+            ("startup_time", "TEXT"),
+            ("current_job_id", "TEXT"),
+        ]
+        for col_name, col_def in workers_columns_to_add:
+            if col_name not in existing_workers_cols:
+                conn.execute(f"ALTER TABLE workers ADD COLUMN IF NOT EXISTS {col_name} {col_def}")
+                logger.info("Migrated PostgreSQL workers table: added column %s", col_name)
+
+    # 4. Composite performance indexes
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status_lease ON jobs (status, lease_expires_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_submitted_at ON jobs (submitted_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_workers_status_hb ON workers (status, last_heartbeat)")
+
+    # 5. Record version migrations
+    now_iso = datetime.now(timezone.utc).isoformat()
+    migrations = [
+        (1, "initial_schema"),
+        (2, "claim_fencing_and_leader_leases"),
+        (3, "worker_process_identity_and_liveness"),
+        (4, "composite_query_indexes"),
+        (5, "postgresql_authoritative_migration"),
     ]
-    for col_name, col_def in columns_to_add:
-        if col_name not in existing_cols:
-            conn.execute(f"ALTER TABLE jobs ADD COLUMN {col_name} {col_def}")
-            logger.info("Migrated jobs table: added column %s", col_name)
+    for v_num, v_name in migrations:
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?) ON CONFLICT (version) DO NOTHING",
+            (v_num, v_name, now_iso),
+        )
 
 
-def init_db() -> None:
+def init_db(db_path: Optional[Path] = None) -> None:
     """Create ``jobs``, ``workers``, and ``leader_fencing`` tables if they do not exist and run migrations."""
-    conn = _get_connection()
+    conn = _get_connection(db_path=db_path)
     try:
         # 1. Jobs table (base schema)
         conn.execute("""
@@ -107,7 +306,7 @@ def init_db() -> None:
                 claimed_at      TEXT,
                 lease_expires_at TEXT,
                 claim_token     TEXT,
-                lamport_ts      INTEGER NOT NULL DEFAULT 0
+                lamport_ts      BIGINT  NOT NULL DEFAULT 0
             )
         """)
 
@@ -118,7 +317,10 @@ def init_db() -> None:
                 status          TEXT    NOT NULL DEFAULT 'online',
                 last_heartbeat  TEXT    NOT NULL,
                 registered_at   TEXT    NOT NULL,
-                jobs_completed  INTEGER NOT NULL DEFAULT 0
+                jobs_completed  BIGINT  NOT NULL DEFAULT 0,
+                pid             INTEGER,
+                startup_time    TEXT,
+                current_job_id  TEXT
             )
         """)
 
@@ -127,7 +329,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS leader_fencing (
                 scope           TEXT PRIMARY KEY,
                 leader_id       TEXT NOT NULL,
-                epoch           INTEGER NOT NULL,
+                epoch           BIGINT  NOT NULL,
                 updated_at      TEXT NOT NULL
             )
         """)
@@ -136,13 +338,14 @@ def init_db() -> None:
         _migrate_db(conn)
 
         conn.commit()
-        logger.info("Database initialised and migrated (jobs, workers & leader_fencing) at %s", DB_PATH)
+        db_desc = "PostgreSQL cluster" if isinstance(conn, PostgresConnectionWrapper) else str(db_path or get_db_path())
+        logger.info("Database initialised and migrated (jobs, workers & leader_fencing) at %s", db_desc)
     finally:
         conn.close()
 
 
 def validate_and_record_leader_epoch(
-    conn: sqlite3.Connection,
+    conn: Any,
     leader_id: str,
     epoch: int,
     scope: str = "scheduler_recovery",
@@ -612,47 +815,111 @@ def get_all_jobs() -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Worker Registry & Heartbeat Operations (Stage 4)
 # ---------------------------------------------------------------------------
-def register_worker(worker_id: str) -> None:
+def register_worker(
+    worker_id: str,
+    pid: Optional[int] = None,
+    startup_time: Optional[str] = None,
+) -> None:
     """Register a new worker node or reactivate an existing one (UPSERT).
 
-    Uses SQLite ``INSERT ... ON CONFLICT`` to atomically insert or update
-    the worker row, setting ``status='online'`` and updating ``last_heartbeat``.
+    Stores worker_id, status, last_heartbeat, registered_at, pid, and startup_time.
     """
     init_db()
     now = datetime.now(timezone.utc).isoformat()
+    start_ts = startup_time or now
     conn = _get_connection()
     try:
         conn.execute(
             """
-            INSERT INTO workers (worker_id, status, last_heartbeat, registered_at, jobs_completed)
-            VALUES (?, 'online', ?, ?, 0)
+            INSERT INTO workers (worker_id, status, last_heartbeat, registered_at, jobs_completed, pid, startup_time, current_job_id)
+            VALUES (?, 'online', ?, ?, 0, ?, ?, NULL)
             ON CONFLICT(worker_id) DO UPDATE SET
                 status = 'online',
-                last_heartbeat = excluded.last_heartbeat
+                last_heartbeat = excluded.last_heartbeat,
+                pid = COALESCE(excluded.pid, workers.pid),
+                startup_time = COALESCE(excluded.startup_time, workers.startup_time)
             """,
-            (worker_id, now, now),
+            (worker_id, now, now, pid, start_ts),
         )
         conn.commit()
-        logger.info("Worker %s registered/online", worker_id)
+        logger.info("Worker %s registered/online (pid=%s)", worker_id, pid)
     finally:
         conn.close()
 
 
-def update_heartbeat(worker_id: str) -> None:
+def update_heartbeat(worker_id: str, current_job_id: Optional[str] = None) -> None:
     """Update a worker's ``last_heartbeat`` timestamp to now and set status to ``'online'``."""
     now = datetime.now(timezone.utc).isoformat()
     conn = _get_connection()
     try:
-        conn.execute(
+        if current_job_id is not None:
+            conn.execute(
+                """
+                UPDATE workers
+                SET last_heartbeat = ?,
+                    status = 'online',
+                    current_job_id = ?
+                WHERE worker_id = ?
+                """,
+                (now, current_job_id, worker_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE workers
+                SET last_heartbeat = ?,
+                    status = 'online'
+                WHERE worker_id = ?
+                """,
+                (now, worker_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clean_test_artifacts() -> Dict[str, int]:
+    """Purge synthetic test jobs and test workers that may have been created during unit testing."""
+    conn = _get_connection()
+    try:
+        cursor_jobs = conn.execute(
             """
-            UPDATE workers
-            SET last_heartbeat = ?,
-                status = 'online'
-            WHERE worker_id = ?
-            """,
-            (now, worker_id),
+            DELETE FROM jobs
+            WHERE job_id LIKE 'test-%'
+               OR job_id LIKE 'stranded-%'
+               OR job_id LIKE 'reconcile-%'
+               OR job_id LIKE 'fence-%'
+               OR job_id LIKE 'crash-window-%'
+               OR job_id LIKE 'retry-limit-%'
+               OR job_id LIKE 'running-missing-%'
+               OR job_id LIKE 'active-lease-%'
+               OR job_id LIKE 'job-fail-test-%'
+            """
+        )
+        cursor_workers = conn.execute(
+            """
+            DELETE FROM workers
+            WHERE worker_id LIKE 'worker-test-%'
+               OR worker_id LIKE 'worker-crashed-%'
+               OR worker_id LIKE 'worker-dead-%'
+               OR worker_id LIKE 'worker-flaky-%'
+               OR worker_id LIKE 'worker-success%'
+               OR worker_id LIKE 'worker-indep%'
+               OR worker_id LIKE 'worker-1'
+               OR worker_id LIKE 'worker-2'
+               OR worker_id LIKE 'w3'
+            """
         )
         conn.commit()
+        logger.info(
+            "Purged test artifacts from SQLite: %d jobs, %d workers",
+            cursor_jobs.rowcount,
+            cursor_workers.rowcount,
+        )
+        return {
+            "deleted_jobs": cursor_jobs.rowcount,
+            "deleted_workers": cursor_workers.rowcount,
+        }
     finally:
         conn.close()
 

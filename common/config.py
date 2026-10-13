@@ -12,6 +12,7 @@ Centralizing configuration ensures:
 
 import os
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -22,8 +23,16 @@ load_dotenv()
 # Base Paths & Database Settings
 # ---------------------------------------------------------------------------
 BASE_DIR: Path = Path(__file__).resolve().parent.parent
+
+def get_db_path() -> Path:
+    """Resolve database path dynamically from environment variable (enables test isolation)."""
+    db_name = os.getenv("JOB_PLATFORM_DB_NAME", "job_platform.db")
+    return BASE_DIR / db_name
+
 DB_FILENAME: str = os.getenv("JOB_PLATFORM_DB_NAME", "job_platform.db")
-DB_PATH: Path = BASE_DIR / DB_FILENAME
+DB_PATH: Path = get_db_path()
+DATABASE_URL: Optional[str] = os.getenv("DATABASE_URL")
+POSTGRES_CONNECT_TIMEOUT_SECONDS: float = float(os.getenv("POSTGRES_CONNECT_TIMEOUT_SECONDS", "10.0"))
 SQLITE_TIMEOUT_SECONDS: float = float(os.getenv("SQLITE_TIMEOUT_SECONDS", "30.0"))
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,186 @@
+# ===========================================================================
+# Distributed Job Platform — Docker Compose Multi-Container Cluster
+# Phase 2 — Real Multi-Process Cluster and Durable Persistence
+# ===========================================================================
+
+services:
+  # -------------------------------------------------------------------------
+  # 1. Authoritative Relational Persistence (PostgreSQL 16)
+  # -------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: job-platform-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-job_platform}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-job_platform}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # 2. In-Memory Job Delivery & Coordination Primitives (Redis 7)
+  # Configured with durable AOF (everysec) and RDB snapshots
+  # -------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: job-platform-redis
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --save 900 1
+      --save 300 10
+      --save 60 1000
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # 3. FastAPI Scheduler & Central Coordinator (Instance 1)
+  # Serves REST API, Web Dashboard, and Prometheus /metrics endpoint
+  # -------------------------------------------------------------------------
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: job-platform-scheduler
+    command: ["python", "-m", "uvicorn", "scheduler.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-job_platform}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SCHEDULER_HOST: "0.0.0.0"
+      SCHEDULER_PORT: 8000
+      SCHEDULER_ID: scheduler-master
+      STALENESS_CHECK_INTERVAL_SECONDS: 5.0
+      WORKER_STALENESS_TIMEOUT_SECONDS: 15.0
+      JOB_LEASE_TIMEOUT_SECONDS: 30.0
+      STALE_JOB_CHECK_INTERVAL_SECONDS: 5.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # 4. Autonomous Worker Instance 1
+  # -------------------------------------------------------------------------
+  worker-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: job-platform-worker-1
+    command: ["python", "-m", "worker.consumer"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-job_platform}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      WORKER_ID: worker-1
+      HEARTBEAT_INTERVAL_SECONDS: 5.0
+      JOB_LEASE_TIMEOUT_SECONDS: 30.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      scheduler:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # 5. Autonomous Worker Instance 2
+  # -------------------------------------------------------------------------
+  worker-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: job-platform-worker-2
+    command: ["python", "-m", "worker.consumer"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-job_platform}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      WORKER_ID: worker-2
+      HEARTBEAT_INTERVAL_SECONDS: 5.0
+      JOB_LEASE_TIMEOUT_SECONDS: 30.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      scheduler:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # 6. Observability & Metrics Collection (Prometheus)
+  # -------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: job-platform-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      scheduler:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # 7. Unified SRE Dashboards & Visualization (Grafana 10)
+  # -------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: job-platform-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local

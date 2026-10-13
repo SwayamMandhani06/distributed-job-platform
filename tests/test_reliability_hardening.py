@@ -350,3 +350,81 @@ class TestQueueReconciliation(unittest.TestCase):
         self.assertEqual(db_job["retry_count"], 3)
         self.assertEqual(db_job["max_retries"], 3)
         self.assertIn("Exhausted maximum retry attempts (3/3)", db_job["error_message"])
+
+
+class TestPhase1TruthfulObservabilityAndWorkerLiveness(unittest.TestCase):
+    """Regression test suite for Phase 1: Real worker liveness, truthful metrics, and handler idempotency."""
+
+    @classmethod
+    def setUpClass(cls):
+        init_db()
+
+    def test_11_worker_registration_stores_process_identity(self):
+        """Worker registration stores OS process ID and startup timestamp."""
+        from common.database import register_worker, get_all_workers
+        worker_id = f"worker-proc-{uuid4().hex[:8]}"
+        register_worker(worker_id, pid=12345, startup_time="2026-10-13T10:00:00+00:00")
+
+        workers = get_all_workers()
+        w = next(w for w in workers if w["worker_id"] == worker_id)
+        self.assertEqual(w["pid"], 12345)
+        self.assertEqual(w["startup_time"], "2026-10-13T10:00:00+00:00")
+        self.assertEqual(w["status"], "online")
+
+    def test_12_worker_heartbeat_freshness_filter(self):
+        """Workers with heartbeats older than threshold transition offline."""
+        from common.database import register_worker, mark_stale_workers_offline, get_all_workers
+        w_live = f"worker-live-{uuid4().hex[:8]}"
+        w_stale = f"worker-stale-{uuid4().hex[:8]}"
+
+        register_worker(w_live, pid=1111)
+        register_worker(w_stale, pid=2222)
+
+        # Manually backdate w_stale heartbeat to 30 seconds ago
+        stale_time = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+        conn = _get_connection()
+        conn.execute("UPDATE workers SET last_heartbeat = ? WHERE worker_id = ?", (stale_time, w_stale))
+        conn.commit()
+        conn.close()
+
+        marked = mark_stale_workers_offline(timeout_seconds=15.0)
+        self.assertIn(w_stale, marked)
+        self.assertNotIn(w_live, marked)
+
+        workers = get_all_workers()
+        stale_node = next(w for w in workers if w["worker_id"] == w_stale)
+        live_node = next(w for w in workers if w["worker_id"] == w_live)
+        self.assertEqual(stale_node["status"], "offline")
+        self.assertEqual(live_node["status"], "online")
+
+    def test_13_idempotent_email_handler_replay(self):
+        """At-least-once handler replay generates identical message_id for identical inputs."""
+        from worker.handlers import handle_email
+        payload = {
+            "to": "alice@example.com",
+            "subject": "System Alert",
+            "body": "Node 3 rebooted.",
+        }
+        res1 = handle_email(payload)
+        res2 = handle_email(payload)
+
+        self.assertEqual(res1["status"], "delivered")
+        self.assertEqual(res1["message_id"], res2["message_id"])
+        self.assertEqual(res1["idempotency_key"], res2["idempotency_key"])
+
+    def test_14_clean_test_artifacts_utility(self):
+        """Test artifact cleaner purges synthetic test jobs and workers."""
+        from common.database import clean_test_artifacts
+        test_job_id = f"test-synthetic-{uuid4().hex[:8]}"
+        test_worker_id = f"worker-test-synthetic-{uuid4().hex[:8]}"
+
+        insert_job(test_job_id, "test", {}, datetime.now(timezone.utc).isoformat())
+        from common.database import register_worker
+        register_worker(test_worker_id)
+
+        cleaned = clean_test_artifacts()
+        self.assertGreaterEqual(cleaned["deleted_jobs"], 1)
+        self.assertGreaterEqual(cleaned["deleted_workers"], 1)
+
+        db_job = get_job(test_job_id)
+        self.assertIsNone(db_job)

@@ -24,3 +24,9 @@ python-dotenv>=1.0.0,<2.0.0
 pytest>=7.0.0,<10.0.0
 httpx>=0.24.0,<1.0.0
 
+# PostgreSQL driver for production multi-container deployments
+psycopg2-binary>=2.9.9,<3.0.0
+
+# Prometheus metrics scraping & exposition
+prometheus-client>=0.17.0,<1.0.0
+

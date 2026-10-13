@@ -21,7 +21,12 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 from common.config import (
     REDIS_HOST,
@@ -50,9 +55,11 @@ def run_live_recovery_demonstration():
 
     # 0. Initialize DB and Queue
     init_db()
-    queue = JobQueue()
+    q_name = "demo_crash_queue"
+    proc_name = "demo_crash_queue:processing"
+    queue = JobQueue(queue_name=q_name, processing_queue=proc_name)
     # Ensure clean test state for demo
-    queue.redis_client.delete(QUEUE_NAME, PROCESSING_QUEUE_NAME)
+    queue.redis_client.delete(q_name, proc_name)
     conn = _get_connection()
     try:
         conn.execute("DELETE FROM jobs WHERE status IN ('running', 'pending')")

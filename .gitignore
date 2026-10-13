@@ -29,6 +29,8 @@ job_platform.db-shm
 *.sqlite3
 dump.rdb
 *.rdb
+appendonlydir/
+*.aof
 
 
 # ----- Environment Variables & Secrets -----
